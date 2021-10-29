@@ -1,0 +1,273 @@
+---
+title: "State space model autotrophic rivers"
+author: "Alice Carter"
+date: "10/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
+library(tidyverse)
+library(lme4)
+library(rstan)
+library(gdata)
+library(bayesplot)
+
+```
+
+### Questions:
+
+1. What are the important drivers of metabolism in rivers if we consider the
+element of time in our models?
+
+2. Are the drivers of GPP in autotrophic rivers the same as in heterotrophic
+rivers?
+
+To begin, I will use this as an opportunity to work through the mechanics of
+a state space model in stan by building a simple autoregressive model of GPP 
+incorporating light as a control.
+
+### Data
+
+There are 36 rivers in the powell center dataset that are autotrophic at the 
+annual timescale. Some of these have very little productivity or respiration
+and are not that interesting. To begin, I have selected a subset of the 'most'
+autotrophic rivers defined in two ways. First, those that have the highest GPP,
+and second, those in which a large fraction of the fixed carbon is not respired
+but remains available for export or storage (high NEP/GPP). This gives us a
+total of 16 site years from 8 streams.
+
+```{r}
+auto <- read_csv('C:/Users/Alice Carter/git/autotrophic_rivers/data/selected_autotrophic_rivers_daily.csv')%>% 
+  mutate(Name = substr(Name, 1, 15))
+
+annual <- auto %>%
+  group_by(sitecode, Name, year) %>%
+  summarize(GPP = sum(GPP, na.rm = T),
+            ER = sum(ER, na.rm = T),
+            par_av = sum(!is.na(light_PAR))/365,
+            NEP_frac_GPP = (GPP+ER)/GPP) 
+
+ggplot(annual, aes(log(GPP), NEP_frac_GPP, col = Name)) +
+  geom_point(size = 2)
+```
+
+
+I have decided to start with three of them: 
+
+1) Pecos river near Girvin, TX (high GPP)
+
+2) East Canyon Creek below I-80, UT (high NEP/GPP)
+
+3) Grand River near Eastmanfille, MI (medium high GPP, medium high NEP/GPP)
+
+```{r}
+# select the three sites of interest:
+p_code <- 'nwis_08446500'   # pecos river near Girvin
+ec_code <- 'nwis_10133650'  # east canyon creek near I-80
+gr_code <- 'nwis_04119400'  # grand river enar eastmanville
+
+pecos <- auto %>% 
+  filter(sitecode == p_code)
+
+east <- auto %>%
+  filter(sitecode == ec_code)
+
+grand <- auto %>%
+  filter(sitecode == gr_code)
+
+bind_rows(pecos, east, grand) %>%
+  ggplot(aes(light_PAR, log(GPP), color = Name)) +
+  geom_point() +
+  facet_wrap(~Name, scales = 'free_y')+
+  theme(legend.position = 'none')
+
+```
+
+Unsurprisingly, it looks like at each of these streams, GPP is correlated with light.
+
+### Model
+
+First, we need to deal with missing data. I am going to save this piece for later,
+after talking to Matt and after getting an initial model working. For now I am 
+just doing a linear interpolation of any gaps.
+```{r}
+
+east <- east %>%
+  arrange(Date) %>%
+  select(sitecode, date = Date, GPP, light_PAR) %>%
+  mutate(across(c('GPP', 'light_PAR'), 
+                ~ zoo::na.approx(., na.rm = F)),
+         light_PAR = light_PAR/max(light_PAR, na.rm = T),
+         logGPP = log(GPP)) %>%
+  filter(!is.na(GPP), !is.na(light_PAR)) 
+  
+
+grand <- grand %>%
+  arrange(Date) %>%
+   select(sitecode, date = Date, GPP, light_PAR) %>%
+  mutate(across(c('GPP', 'light_PAR'), 
+                ~ zoo::na.approx(., na.rm = F)),
+         light_PAR = light_PAR/max(light_PAR, na.rm = T),
+         logGPP = log(GPP)) %>%
+  filter(!is.na(GPP), !is.na(light_PAR))
+
+pecos <- pecos %>%
+  arrange(Date) %>%
+  select(sitecode, date = Date, GPP, light_PAR) %>%
+  mutate(across(c('GPP', 'light_PAR'), 
+                ~ zoo::na.approx(., na.rm = F)),
+         light_PAR = light_PAR/max(light_PAR, na.rm = T),
+         logGPP = log(GPP)) %>%
+  filter(!is.na(GPP), !is.na(light_PAR))
+
+# Check to see the autocorrelation pattern
+par(mfrow = c(1,3))
+pacf(east$GPP)
+pacf(grand$GPP)
+pacf(pecos$GPP)
+
+```
+
+All of them are very autocorrelated, an autoregressive model probably makes sense.
+
+#### Model equations
+
+
+$$x_t = \phi * x_{t-1} + \beta_0 + \beta_1 * PAR_t + \epsilon_t$$
+$$\epsilon_t \sim normal(0, \sigma_t)$$
+$$y_t \sim Normal(x_t, \omega)$$
+
+
+where $y_t$ is the observed value of the underlying process, $x_t$, $\omega$ is 
+the observation error and $\sigma$ is the process error. 
+
+#### Priors:
+
+$\phi \sim Uniform(0,1)$
+
+$\beta_0 \sim Normal(0,10)$
+
+$\beta_1 \sim Log Normal(0,1)$
+
+$\sigma \sim Exponential(1)$
+
+$\omega \sim Exponential(1)$
+
+Below is the code for the stan model.
+
+```{r, eval = FALSE}
+
+write("// Stan simple autoregressive model
+
+data {
+ int <lower = 0> N; // Sample size
+ vector[N] GPP_obs; // observed values, y
+ vector[N] light_PAR; // driver 
+ real GPP_obs_1;
+}
+
+parameters {
+
+ real < lower = 0, upper = 1> phi; 
+ real beta0; // Intercept
+ real < lower = 0 > beta1; // constrained to positive values 
+ real < lower = 0 > sigma;
+ real < lower = 0 > omega;
+ vector[N] GPP_mod;
+}
+
+model {
+ 
+ GPP_mod[1] ~ normal(GPP_obs_1, 1);
+ for(i in 2:N){
+  GPP_mod[i] ~ normal(phi * GPP_mod[i-1] + beta0 + beta1 * light_PAR[i], sigma);
+ }
+ GPP_obs ~ normal(GPP_mod, omega);
+ 
+ //priors
+ phi ~ uniform(0,1);
+ beta0 ~ normal(0,10);
+ beta1 ~ lognormal(0,1);
+ sigma ~ exponential(1);
+ omega ~ exponential(1);
+ 
+}
+
+generated quantities {
+} ",
+
+"src/ar1/ar1_model.stan")
+stanc('src/ar1/ar1_model.stan')
+ar1_mod <- 'src/ar1/ar1_model.stan'
+```
+
+```{r, eval=FALSE}
+stan_dat <- list(N = nrow(east), GPP_obs = east$logGPP, 
+                 GPP_obs_1 = east$logGPP[1],
+                 light_PAR = east$light_PAR)
+fit_east <- stan(file = ar1_mod, data = stan_dat, warmup = 500, iter = 10000, 
+            chains = 4, cores = 2, thin = 1)
+saveRDS(fit_east, 'data/model_fits/east_ar1.rds')
+
+stan_dat <- list(N = nrow(grand), GPP_obs = grand$GPP, GPP_obs_1 = grand$GPP[1],
+                 light_PAR = grand$light_PAR)
+fit_grand <- stan(file = ar1_mod, data = stan_dat, warmup = 500, iter = 10000, 
+            chains = 4, cores = 2, thin = 1)
+saveRDS(fit_grand, 'data/model_fits/grand_ar1.rds')
+
+stan_dat <- list(N = nrow(pecos), GPP_obs = pecos$GPP, GPP_obs_1 = pecos$GPP[1],
+                 light_PAR = pecos$light_PAR)
+fit_pecos <- stan(file = ar1_mod, data = stan_dat, warmup = 500, iter = 10000, 
+            chains = 4, cores = 2, thin = 1)
+saveRDS(fit_pecos, 'data/model_fits/pecos_ar1.rds')
+
+```
+
+
+### Model Fit
+
+Below are results of the model fit for the Grand River. In all three cases, the model is struggling to resolve observation error ($\omega$), with the worst example shown below. 
+
+
+```{r}
+fit <- readRDS('C:/Users/Alice Carter/git/autotrophic_rivers/data/model_fits/east_ar1.rds')
+
+
+traceplot(fit, c('phi', 'beta0', 'beta1', 'sigma', 'omega'))
+stan_dens(fit,  c('phi', 'beta0', 'beta1', 'sigma', 'omega'))
+
+```
+
+Model predicted GPP:
+
+```{r}
+posterior <- extract(fit)
+plot(east$date, log(east$GPP), type = 'l',
+     xlab = 'date', ylab = 'GPP')
+points(east$date, posterior$GPP_mod[1,])
+legend('topright', c('observed', 'modeled'), 
+       lty = c(1,0), pch = c(NA,1), bty = 'n')
+
+```
+
+### Next Steps
+
+1. Discuss model:
+- Is this structure correct for an autoregressive model?  I'm unsure about the way I am defining the initial state, GPP[1]
+- Should I be normalizing all of the variables?
+- Are these priors reasonable or are there better ones I should be using?
+- What should I be thinking about in looking at the model fit?
+
+2. Compare dynamics across streams:
+- How does light dependence vary across autotrophic streams?
+- Does light dependence differ systematically in autotrophic vs heterotrophic streams?
+- Is the model fit different in autotrophic vs heterotrophic streams different? ie, is there a different degree of autoregressive correlation of GPP?
+
+3. Add other explanatory variables:
+- Add a disturbance term for discharge, maybe like an error in a moving average model?
+- Water temperature? How do dynamics differ in streams where light and temperature covary vs streams where they don't?
+
+4. Pool parameters across streams
+
