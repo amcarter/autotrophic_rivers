@@ -1,0 +1,36 @@
+---
+title: "State space SAM"
+author: "alice carter"
+date: "10/31/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Building a state space stochastic antecedent model
+
+Question: To what extent does ecosystem respiration in rivers retain memory of previous fluxes of primary productivity? In what types of rivers, or under what conditions do we observe more ecological memory? Over what time scale (days, weeks) does this memory occur?
+
+Hypotheses:
+Rivers with higher fluxes of primary productivity will derive a greater portion of their respiration from autochthonous production, resulting in a possibility for ecological memory of productivity in respiration fluxes. Community dynamics will determine the likelihood of a time lag with phytoplankton dominated communities deriving most of their respiration from that days productivity and benthic, macrophyte dominated comunities demonstrating time lags in the response of ER to GPP.
+
+Goals: 
+1. Take a simple SAM model of ER as a function of the previous five days of GPP and add observation error. 
+2. Test different time intervals of GPP memory
+3. Run model on a set of autotrophic rivers from the Powell Center dataset.
+
+```{r cars}
+```
+
+```{r pressure, echo=FALSE}
+```
+
+
+
+
+
+
+
+

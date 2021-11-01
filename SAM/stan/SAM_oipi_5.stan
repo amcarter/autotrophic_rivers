@@ -9,10 +9,12 @@
   }
   
   parameters {
+    vector [N] mu; // latent, unobserved R values
     real <lower = 0> a;
     real b;
     simplex [nweight] w;
     real <lower = 0> sigma_proc;
+    real <lower = 0> sigma_obs;
   }
   
   transformed parameters {
@@ -30,12 +32,16 @@
   
   model {
     for(i in (nweight + 1):N){
-      R[i] ~ normal(b + a * Pant[i], sigma_proc); //likelihood
+      mu[i] ~ normal(b + a * Pant[i], sigma_proc); //likelihood
+      R[i] ~ normal(mu[i], sigma_obs);
     }
     
-    b ~ normal(0,5); // priors
+    // priors
+    b ~ normal(0,5); 
     a ~ normal(0,1);
     w ~ dirichlet(alpha);
+    sigma_proc ~ normal(0,1) T[0,];
+    sigma_obs ~ normal(0,1) T[0,];
   }
   
   generated quantities{

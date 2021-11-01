@@ -1,5 +1,5 @@
 
-    
+
   data {
     int <lower = 0> N;
     vector [N] P;
@@ -7,38 +7,52 @@
     int <lower = 0> nweight;
     vector [nweight] alpha;
   }
-    
+  
   parameters {
-    real <lower =0> a;
+    real <lower = 0> a;
     real b;
-    simplex [nweight] w; 
-    real <lower=0> sigma;
+    simplex [nweight] w;
+    real <lower = 0> sigma_proc;
   }
+  
+  transformed parameters {
+    vector [N] Pant;
+    Pant[1:nweight] = P[1:nweight];
     
-  transformed parameters{
-    vector  [N] Pant;
-    Pant[1:5]= P[1:5];
-
-    for (i in 6:N){
-      vector  [nweight] Pvec;
+    for(i in (nweight + 1):N){
+      vector [nweight] Pvec;
       for(j in 1:nweight){
-        Pvec[j]=w[j]*P[i-(j-1)];
+        Pvec[j] = w[j] * P[i-(j-1)];
       }
-      Pant[i]=sum(Pvec);
+      Pant[i] = sum(Pvec);
     }
-
   }
-    
+  
   model {
-    for ( i in 6:N){
-      R[i] ~ normal(b+a*Pant[i], sigma); // likelihood
+    for(i in (nweight + 1):N){
+      R[i] ~ normal(b + a * Pant[i], sigma_proc); //likelihood
     }
-
-    b~normal(0,5); //priors
-    a~normal(0,1);
-    w~dirichlet(alpha);
+    
+    // priors
+    b ~ normal(0,5); 
+    a ~ normal(0,1);
+    w ~ dirichlet(alpha);
+    sigma_proc ~ normal(0,1) T[0,];
   }
-
+  
   generated quantities{
-
+  
   }
+  [1] 10.000000  9.962369 10.121644  8.852814  8.804565  0.000000  0.000000  0.000000
+  [9]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [17]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [25]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [33]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [41]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [49]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [57]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [65]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [73]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [81]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [89]  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000  0.000000
+ [97]  0.000000  0.000000  0.000000  0.000000
