@@ -1,12 +1,13 @@
 ---
 title: "State space SAM"
 author: "alice carter"
-date: "10/31/2021"
+date: "10/27/2021"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(rstan)
 ```
 
 ## Building a state space stochastic antecedent model
@@ -21,16 +22,292 @@ Goals:
 2. Test different time intervals of GPP memory
 3. Run model on a set of autotrophic rivers from the Powell Center dataset.
 
-```{r cars}
+## Model
+
+Based on Ogle and Barber 2015, adapted from code by Bob Hall.
+
+Model respiration ($R$) as a linear function of GPP on prior days:
+
+$$R_t = b + a P^{ant}_t + \varepsilon_t$$
+
+where $P_ant$ is a function of the previous j days of productivity (j = 0 is the current day)
+
+$$P^{ant}_t = \displaystyle\sum_{j=0}^{J} w_j P_{t-j} $$
+
+and process error is incorporated as:
+
+$$\varepsilon_t \sim N (0, \sigma_{proc})$$
+
+To make this a state space model, we model our observations of respiration, $R_{obs,t}$, as a function of the unobserved latent state, $R_t$.
+
+$$ R_{obs,t} \sim N (R_t, \sigma_{obs})$$
+
+Priors are minimally informative, but a special prior on $w$, which is a simplex 
+
+$$w \sim dirichlet(1,1,...1)$$
+
+## Stan Code
+
+```{r, eval = FALSE} 
+sink("src/SAM/stan/SAM.stan")
+
+cat("
+    data {
+      int <lower = 0> N;
+      vector [N] P;
+      vector [N] R;
+      int <lower = 0> nweight;
+      vector [nweight] alpha;
+    }
+    
+    parameters {
+      real <lower =0> a;
+      real b;
+      simplex [nweight] w; 
+      real <lower=0> sigma_proc;
+      real <lower=0> sigma_obs;
+      vector [N] R_mod;
+    }
+    
+    transformed parameters{
+      vector  [N] Pant;
+      Pant[1:5] = P[1:5];
+
+      for (i in 6:N){
+        vector  [nweight] Pvec;
+        for(j in 1:nweight){
+          Pvec[j]=w[j]*P[i-(j-1)];
+        }
+        Pant[i]=sum(Pvec);
+      }
+    }
+    
+    model {
+      //R_mod[1:5] = R[1:5];
+      for (i in 6:N){
+        R_mod[i] ~ normal(b+a*Pant[i], sigma_proc); // likelihood
+      }
+      
+      for (i in 1:N){
+        R[i] ~ normal(R_mod[i], sigma_obs);
+      }
+
+    b ~ normal(0,5); //priors
+    a ~ normal(0,1);
+    w ~ dirichlet(alpha);
+    sigma_proc ~ normal(0,1) T[0,];
+    sigma_obs ~ normal(0,1) T[0,];
+    }
+    
+    generated quantities{
+    
+    }" ,fill=TRUE)
+
+sink()
+
 ```
 
-```{r pressure, echo=FALSE}
+## Fake Data: Assign weight with 50% each on lags day 1 and 2
+
+```{r} 
+# set parameters
+a = 0.5
+b = 0
+w <- c(0.5,0.5,0,0,0)
+sigma_proc = 0.2
+sigma_obs = 0.2
+
+# generate data
+P <- numeric(100)
+R <- numeric(100)
+P[1] <- 10
+for (i in 2:100)
+  P[i] <- 1+0.9* P[i-1]+rnorm(1,0,0.85)
+
+Pant <- numeric(100)
+Pant[1:5]<-P[1:5]
+
+for (i in 6:100){
+  Pvec<-numeric(5)
+  for(j in 1:5){
+    Pvec[j]<-w[j]*P[i-(j-1)]
+  }
+  Pant[i]<-sum(Pvec)
+  
+}
+
+R_mod <- 0.5 * P[1]
+for (i in 2:100){
+  R_mod[i] <- b + a*Pant[i] + rnorm(1, 0, sigma_proc)
+}
+for (i in 1:100){
+  R[i] <- rnorm(1, R_mod[i], sigma_obs)
+}
+
+plot(P,R)
+```
+
+## Parameter recovery:
+```{r}
+
+# sim_dat <- list(R = R, P = P, N = length(P), nweight = 5, alpha = rep(1, 5))
+# fit_fake <- stan(file = 'src/SAM/stan/SAM.stan', 
+#                  data = sim_dat, 
+#                  warmup = 500, iter = 1000, 
+#                  chains = 4, cores = 4)
+
+fit_fake <- readRDS('C:/Users/Alice Carter/git/autotrophic_rivers/src/SAM/fit_fake.rda')
+
+print(fit_fake, pars=c("a", "b", "w", 'sigma_proc', 'sigma_obs'))
+plot(fit_fake, pars = c("a", "b", "w", 'sigma_proc', 'sigma_obs'))
+posterior <- extract(fit_fake)
+
+```
+### Troubleshooting
+- Several warnings including: divergent transitions, low Bayesian Fraction of Missing Information, largest R-hat is NA, bulk effective sample size is too low, tail effective sample size is too low.
+- It appears that the process error $\sigma_{proc}$, may be trading off with the observation error $\sigma_{obs}$
+
+```{r, echo = F}
+plot(posterior$sigma_proc, posterior$sigma_obs, xlab = 'process error', 
+     ylab = 'observation error', main = 'joint distribution')
+```
+I am confused about how to correctly include both process and observation error in a model where I am not including an autoregressive term. In the Ogle paper examples, I don't think that the first model (where ANPP = f(precip)) includes both types of error. It includes a data model with observation error:
+
+$$ ANPP \sim N(\mu, \sigma_{obs}) $$
+
+and a deterministic process model:
+
+$$ \mu(t) = \alpha_0 + \alpha_1 Ev_{0-5}(t) + ... + \alpha_5 PPT_{ant}(t) $$
+
+- I don't know how to set the first j values of modeled ER in the stan code and as a result the model is trying to fit them without any information. Additionally, the chains for several of the later respiration estimates are not converging:
+
+```{r, echo = FALSE}
+
+traceplot(fit_fake, pars = 'R_mod[1]')
+traceplot(fit_fake, pars = 'R_mod[10]')
 ```
 
 
+## Testing model integrating over different past time intervals:
+
+In Ogle and Barber 2015, they integrate different drivers over different past time periods. As an initial test, I am implementing similar code to incorporate different past intervals of GPP including:
+- GPP on the same day
+- GPP on the previous day
+- GPP during the preceding week
+- GPP during the preceding month
+
+I realize the problem inherent in this is that the predictor variables are now nested, with yesterday's GPP included in each of the last three. For now I will still give it a try.
+
+## Stan Code
+```{r, eval = FALSE}
+sink("src/SAM/stan/SAM_intervals.stan")
+
+cat("
+    data {
+      int <lower = 0> N;
+      vector [N] P;
+      vector [N] R;
+      int <lower = 0> nweight;
+      vector [nweight] alpha;
+    }
+    
+    parameters {
+      real <lower =0> a;
+      real b;
+      simplex [nweight] w; 
+      real <lower=0> sigma_proc;
+      real <lower=0> sigma_obs;
+      vector [N] R_mod;
+    }
+    
+    transformed parameters{
+      vector  [N] Pant;
+      Pant[1:30] = P[1:30];
+
+      for (i in 31:N){
+        real Pweek;
+        real Pmonth;
+        Pweek = sum(P[(i-7):(i-1)])/7;
+        Pmonth = sum(P[(i-30):(i-1)])/30;
+        
+        Pant[i] = w[1]*P[i] + w[2]*P[i-1] + w[3]*Pweek + w[4]*Pmonth;
+        
+      }
+    }
+    
+    model {
+      for (i in 31:N){
+        R_mod[i] ~ normal(b+a*Pant[i], sigma_proc); // likelihood
+      }
+      
+      for (i in 1:N){
+        R[i] ~ normal(R_mod[i], sigma_obs);
+      }
+
+    b ~ normal(0,5); //priors
+    a ~ normal(0,1);
+    w ~ dirichlet(alpha);
+    sigma_obs ~ normal(0,1) T[0,];
+    sigma_proc ~ normal(0,1) T[0,];
+    }
+    
+    generated quantities{
+    
+    }" ,fill=TRUE)
+
+sink()
+```
+
+## Fake Data
+In this case, I am building a dataset where the weights on today, yesterday and the past week are all 1/3 and the weight on the past month is zero:
+
+```{r}
+# set parameters
+a = 0.5
+b = 0
+w <- c(1/3,1/3,1/3,0)
+sigma_obs = 0.2
+sigma_proc = 0.2
+
+# generate data
+P <- numeric(365)
+R <- numeric(365)
+P[1] <- 10
+for (i in 2:365)
+  P[i] <- 1+0.9* P[i-1]+rnorm(1,0,0.85)
+
+Pant <- numeric(365)
+Pant[1:30]<-P[1:30]
+
+for (i in 31:365){
+  Pweek = sum(P[(i-7):(i-1)])/7
+  Pmonth = sum(P[(i-30):(i-1)])/30
+  Pant[i] = w[1]*P[i] + w[2]*P[i-1] + w[3]*Pweek + w[4]*Pmonth;
+}
 
 
+R_mod <- b + a * P[1]
+for (i in 2:365){
+  R_mod[i] <- b + a*Pant[i] + rnorm(1, 0, sigma_proc)
+}
+for (i in 1:365){
+  R[i] <- rnorm(1, R_mod[i], sigma_obs)
+}
 
+plot(P,R)
 
+fit_fake2 <- readRDS('C:/Users/Alice Carter/git/autotrophic_rivers/src/SAM/fit_fake2.rda')
+print(fit_fake2, pars=c("a", "b", "w", 'sigma_proc', 'sigma_obs'))
+plot(fit_fake2, pars = c("a", "b", "w", 'sigma_proc', 'sigma_obs'))
 
+```
 
+While the model is able to recover the parameters fairly well, several problems come up here, including all of the same warnings as above. Additionally, there is a large amount of uncertainty in the intercept and  both the process and observation errors.
+
+## Next:
+1. Finish state space implementation
+  - figure out why observation error is trading off with process error
+  - how to set first five latent states
+2. Test models on more datasets
+3. Compare results to a simple autoregressive model
+4. Incorporate a missing data model 
