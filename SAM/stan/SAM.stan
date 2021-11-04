@@ -8,12 +8,10 @@
     }
     
     parameters {
-      real <lower =0> a;
-      real b;
+      real a0;
+      real <lower =0> a1;
       simplex [nweight] w; 
-      real <lower=0> sigma_proc;
-      real <lower=0> sigma_obs;
-      vector [N] R_mod;
+      real <lower=0> sigma;
     }
     
     transformed parameters{
@@ -22,7 +20,7 @@
 
       for (i in 6:N){
         vector  [nweight] Pvec;
-        for(j in 1:nweight){
+        for(j in 1:nweight){ 
           Pvec[j]=w[j]*P[i-(j-1)];
         }
         Pant[i]=sum(Pvec);
@@ -30,22 +28,22 @@
     }
     
     model {
-      //R_mod[1:5] = R[1:5];
       for (i in 6:N){
-        R_mod[i] ~ normal(b+a*Pant[i], sigma_proc); // likelihood
+        R[i] ~ normal(a0 + a1*Pant[i], sigma); // likelihood
       }
       
-      for (i in 1:N){
-        R[i] ~ normal(R_mod[i], sigma_obs);
-      }
 
-    b ~ normal(0,5); //priors
-    a ~ normal(0,1);
+    a0 ~ normal(0,5); //priors
+    a1 ~ normal(0,1);
     w ~ dirichlet(alpha);
-    sigma_proc ~ normal(0,1) T[0,];
-    sigma_obs ~ normal(0,1) T[0,];
+    sigma ~ normal(0,1) T[0,];
     }
     
     generated quantities{
-    
+      vector [N] R_hat;
+      R_hat[1:5] = R[1:5];
+      for(i in 6:N){
+        R_hat[i] = normal_rng(a0 + a1 * Pant[i], sigma);
+      }
+      
     }

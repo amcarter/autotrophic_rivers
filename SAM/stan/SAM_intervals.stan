@@ -8,12 +8,10 @@
     }
     
     parameters {
-      real <lower =0> a;
-      real b;
+      real a0;
+      real <lower =0> a1;
       simplex [nweight] w; 
-      real <lower=0> sigma_proc;
-      real <lower=0> sigma_obs;
-      vector [N] R_mod;
+      real <lower=0> sigma;
     }
     
     transformed parameters{
@@ -33,18 +31,13 @@
     
     model {
       for (i in 31:N){
-        R_mod[i] ~ normal(b+a*Pant[i], sigma_proc); // likelihood
+        R[i] ~ normal(a0 + a1 * Pant[i], sigma); // likelihood
       }
       
-      for (i in 1:N){
-        R[i] ~ normal(R_mod[i], sigma_obs);
-      }
-
-    b ~ normal(0,5); //priors
-    a ~ normal(0,1);
+    a0 ~ normal(0,5); //priors
+    a1 ~ normal(0,1);
     w ~ dirichlet(alpha);
-    sigma_obs ~ normal(0,1) T[0,];
-    sigma_proc ~ normal(0,1) T[0,];
+    sigma ~ normal(0,1) T[0,];
     }
     
     generated quantities{
