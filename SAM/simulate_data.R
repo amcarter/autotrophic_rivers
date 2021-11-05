@@ -41,7 +41,7 @@ for (i in 2:100){
 
 plot(P,R)
 
-## Run SAM model?
+## Run SAM model
 sim_dat <- list(R = R, P = P, N = length(P), nweight = 5, alpha = rep(1, 5))
 fit_fake <- stan(file = 'src/SAM/stan/SAM.stan', 
                  data = sim_dat, 
@@ -49,47 +49,26 @@ fit_fake <- stan(file = 'src/SAM/stan/SAM.stan',
                  chains = 4, cores = 4)
 print(fit_fake, pars=c("a0", "a1", "w", 'sigma'))
 plot(fit_fake, pars = c("a0", "a1", "w", 'sigma'))
-launch_shinystan(fit_fake)
-saveRDS(fit_fake, 'src/SAM/fit_fake.rda')
+# launch_shinystan(fit_fake)
+saveRDS(fit_fake, 'src/SAM/stan/fits/fit_fake.rds')
 
 
 ## Predict data
-rstan::extract(fit_fake, permute = FALSE) %>% reshape2::melt()
-post <- extract(fit_fake)
-post$R_hat
-p_est <- summary(fit_fake, pars = c('a0', 'a1', 'w', 'sigma'), 
-                 probs = c(0.025, 0.975))$summary
-
-a0 <- p_est[1,1]
-a1 <- p_est[2,1]
-w <- p_est[3:7,1]
-
-Pant_pred = numeric(100)
-Pant_pred[1:5] <- P[1:5]
-
-for (i in 6:100){
-  Pvec<-numeric(5)
-  for(j in 1:5){
-    Pvec[j]<-w[j]*P[i-(j-1)]
-  }
-  Pant_pred[i]<-sum(Pvec)
-  
-}
-r_pred <- numeric(100)
-for(i in 1:100){
-  r_pred[i] = a0 + a1 * Pant_pred[i]}
-
-
+post <- summary(fit_fake, pars = c('a0', 'a1', 'w', 'sigma'))$summary
+R_hat <- summary(fit_fake, pars = 'R_hat')$summary %>%
+  as_tibble() %>%
+  pull(mean)
 
 # Do predictions correlate with data?
-plot(R, r_pred)
+plot(R, R_hat)
 abline(0,1)
 
 # are we accounting for all of the autocorrelation in the respiration?
-par(mfrow = c(2,1))
+par(mfrow = c(1,2))
 acf(R, main = 'Autocorrelation of ER')
-acf(R - r_pred, main = 'Autocorrelation of ER residuals')
+acf(R - R_hat, main = 'Autocorrelation of ER residuals')
 
+  
 # SAM model for different previous intervals of GPP ####
 ## Fake Data: Assign weight with 50% each on lags day 1 and 2
 
@@ -134,7 +113,7 @@ fit_fake2 <- stan(file = 'src/SAM/stan/SAM_intervals.stan',
 print(fit_fake2, pars=c("a0", "a1", "w", 'sigma'))
 plot(fit_fake2, pars = c("a0", "a1", "w", 'sigma'))
 
-saveRDS(fit_fake2, 'src/SAM/fit_fake2.rda')
+saveRDS(fit_fake2, 'src/SAM/stan/fits/fit_fake2.rds')
 
 ## Predict data
 p_est <- summary(fit_fake2, pars = c('a0', 'a1', 'w', 'sigma'), 

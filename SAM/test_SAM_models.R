@@ -3,7 +3,9 @@ library(tidyverse)
 library(rstan)
 library(shinystan)
 setwd('C:/Users/Alice Carter/git/autotrophic_rivers')
-source('src/SAM/generate_stan_SAM_models.R')
+
+# run this if the models have been updated
+# source('src/SAM/generate_stan_SAM_models.R')
 
 # read in data from autotrophic rivers
 dat <- read_csv('data/selected_autotrophic_rivers_daily.csv')
@@ -20,15 +22,36 @@ R <- -east$ER
 
 sam_east_dat <- list(R = -east$ER, P = east$GPP, N = length(east$GPP), 
                     nweight = 5, alpha = rep(1,5))
-fit <- stan(file = 'src/SAM/stan/SAM_pi_5.stan', data = sam_east_dat, 
-            warmup = 500, iter = 1000, 
-            chains = 4, cores = 4)
+# fit <- stan(file = 'src/SAM/stan/SAM.stan', data = sam_east_dat, 
+#             warmup = 500, iter = 1000, 
+#             chains = 4, cores = 4)
+# 
+# plot(fit)
+# launch_shinystan(fit)
+# 
+# saveRDS(fit, 'src/SAM/stan/fits/east_sam_fit.rds')
+
+fit <- readRDS(fit, 'src/SAM/stan/fits/east_sam_fit.rds')
+R_hat <- summary(fit, pars = 'R_hat')$summary %>%
+  as_tibble() %>%
+  pull(mean)
+
+# Do predictions correlate with data?
+plot(R, R_hat)
+abline(0,1)
+
+# are we accounting for all of the autocorrelation in the respiration?
+par(mfrow = c(1,2))
+acf(R, main = 'Autocorrelation of ER')
+acf(R - R_hat, main = 'Autocorrelation of ER residuals')
+
+# No and it looks like the pattern in the ER residuals might be seasonal
+par(mfrow = c(1,1))
+plot(east$Date, R-R_hat, xlab = 'date', ylab = 'ER residuals')
 
 
-fit2 <- stan(file = 'src/SAM/stan/SAM_oipi_5.stan', data = sam_east_dat,
-             warmup = 500, iter = 1000,
-             chains = 4, cores = 4)
+# Autoregressive state space model fit ####
 
-fit2
-plot(fit2)
-launch_shinystan(fit2)
+ar1_dat <- list(R = -east$ER)
+
+ile='src/SAM/stan/SAM_oipi_5.stan',data=sam_east_dat,warmup=500,iter=1000,chains=4,cores=4)fit2
