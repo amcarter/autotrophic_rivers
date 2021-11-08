@@ -4,7 +4,7 @@
 setwd("C:/Users/Alice Carter/git/autotrophic_rivers")
 library(rstan)
 library(shinystan)
-
+#
 # Basic SAM code ####
 # ER as a function of GPP on days t-4:t
 
@@ -105,7 +105,7 @@ fit_fake <- stan(file = 'src/SAM/stan/SAM.stan',
 print(fit_fake, pars=c("a0", "a1", "w", 'sigma'))
 plot(fit_fake, pars = c("a0", "a1", "w", 'sigma'))
 # launch_shinystan(fit_fake)
-saveRDS(fit_fake, 'src/SAM/stan/fits/fit_fake.rds')
+saveRDS(list(fit = fit_fake, dat = sim_dat), 'src/SAM/stan/fits/fit_fake.rds')
 
 
 ## Predict data
@@ -129,41 +129,41 @@ acf(R - R_hat, main = 'Autocorrelation of ER residuals')
 
 sink('src/SAM/stan/ar1_model.stan')
 cat("
-data {
- int <lower = 0> N; // Sample size
- vector[N] R;
-}
-
-parameters {
- real a0; // Intercept
- real <lower = 0, upper = 1> a1; 
- real <lower = 0> sigma_proc;
- real <lower = 0> sigma_obs;
- vector [N] mu;
-}
-
-model {
- mu[1] ~ normal(R[1], 0.01);
- mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
- R ~ normal(mu, sigma_obs);
- 
- 
- a0 ~ normal(0,1);
- a1 ~ uniform(0,1);
- sigma_proc ~ normal(0,1) T[0,];
- sigma_obs ~ normal(0,1) T[0,];
-}
-
-generated quantities {
-  vector [N] R_hat;
-  vector [N] R_tilde;
-  R_hat[1] = R[1];
-  R_tilde[1] = R[1];
-  for(i in 2:N){
-      R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
-      R_tilde[i] = normal_rng(R_hat[i], sigma_obs);  
+  data {
+   int <lower = 0> N; // Sample size
+   vector[N] R;
   }
-}", fill = T)
+  
+  parameters {
+   real a0; // Intercept
+   real <lower = 0, upper = 1> a1; 
+   real <lower = 0> sigma_proc;
+   real <lower = 0> sigma_obs;
+   vector [N] mu;
+  }
+  
+  model {
+   mu[1] ~ normal(R[1], 0.01);
+   mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
+   R ~ normal(mu, sigma_obs);
+   
+   
+   a0 ~ normal(0,1);
+   a1 ~ uniform(0,1);
+   sigma_proc ~ normal(0,1) T[0,];
+   sigma_obs ~ normal(0,1) T[0,];
+  }
+  
+  generated quantities {
+    vector [N] R_hat;
+    vector [N] R_tilde;
+    R_hat[1] = R[1];
+    R_tilde[1] = R[1];
+    for(i in 2:N){
+        R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
+        R_tilde[i] = normal_rng(R_hat[i], sigma_obs);  
+    }
+  }", fill = T)
 
 
 sink()
@@ -191,6 +191,7 @@ fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
             chains = 4, cores = 4)
 
 
+saveRDS(list(fit = fit, dat = sim_dat), 'src/SAM/stan/fits/simulated_ar1_fit.rds')
 print(fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
 
 post <- extract(fit)
@@ -301,15 +302,16 @@ lines(P, lty = 2)
 
 ## Run SAM model
 sim_dat <- list(R = R, P = P, N = length(P), nweight = 5, alpha = rep(1, 5))
-fit_fake <- stan(file = 'src/SAM/stan/SAM_ar1.stan', 
-                 data = sim_dat, 
-                 warmup = 500, iter = 1000, 
+fit_fake <- stan(file = 'src/SAM/stan/SAM_ar1.stan',
+                 data = sim_dat,
+                 warmup = 500, iter = 1000,
                  chains = 4, cores = 4)
 print(fit_fake, pars=c("a0", "a1", "a2", "w", 'sigma_proc', 'sigma_obs'))
 plot(fit_fake)
 
-saveRDS(fit_fake, 'src/SAM/stan/fits/simulated_sam_ar1.rds')
+saveRDS(list(fit = fit_fake, dat = sim_dat), 'src/SAM/stan/fits/simulated_sam_ar1.rds')
 
+fit_fake <- readRDS('src/SAM/stan/fits/simulated_sam_ar1.rds')
 post <- extract(fit_fake)
 plot(post$sigma_obs, post$sigma_proc)
 # SAM model for different previous intervals of GPP ####

@@ -3,14 +3,19 @@ title: "State space SAM"
 author: "alice carter"
 date: "10/27/2021"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
+setwd('C:/Users/Alice Carter/git/autotrophic_rivers/')
 library(rstan)
+library(tidyverse)
 ```
 
-## Building a state space stochastic antecedent model
+### Building a state space stochastic antecedent model
 
 Question: To what extent does ecosystem respiration in rivers retain memory of previous fluxes of primary productivity? In what types of rivers, or under what conditions do we observe more ecological memory? Over what time scale (days, weeks) does this memory occur?
 
@@ -46,7 +51,7 @@ Priors are minimally informative, but a special prior on $w$, which is a simplex
 
 $$w \sim dirichlet(1,1,...1)$$
 
-## Stan Code
+### Stan Code
 
 ```{r, eval = FALSE} 
 sink("src/SAM/stan/SAM.stan")
@@ -61,12 +66,10 @@ cat("
     }
     
     parameters {
-      real <lower =0> a;
-      real b;
+      real a0;
+      real <lower =0> a1;
       simplex [nweight] w; 
-      real <lower=0> sigma_proc;
-      real <lower=0> sigma_obs;
-      vector [N] R_mod;
+      real <lower=0> sigma;
     }
     
     transformed parameters{
@@ -75,7 +78,7 @@ cat("
 
       for (i in 6:N){
         vector  [nweight] Pvec;
-        for(j in 1:nweight){
+        for(j in 1:nweight){ 
           Pvec[j]=w[j]*P[i-(j-1)];
         }
         Pant[i]=sum(Pvec);
@@ -83,31 +86,31 @@ cat("
     }
     
     model {
-      //R_mod[1:5] = R[1:5];
       for (i in 6:N){
-        R_mod[i] ~ normal(b+a*Pant[i], sigma_proc); // likelihood
+        R[i] ~ normal(a0 + a1*Pant[i], sigma); // likelihood
       }
       
-      for (i in 1:N){
-        R[i] ~ normal(R_mod[i], sigma_obs);
-      }
 
-    b ~ normal(0,5); //priors
-    a ~ normal(0,1);
+    a0 ~ normal(0,5); //priors
+    a1 ~ normal(0,1);
     w ~ dirichlet(alpha);
-    sigma_proc ~ normal(0,1) T[0,];
-    sigma_obs ~ normal(0,1) T[0,];
+    sigma ~ normal(0,1) T[0,];
     }
     
     generated quantities{
-    
+      vector [N] R_hat;
+      R_hat[1:5] = R[1:5];
+      for(i in 6:N){
+        R_hat[i] = normal_rng(a0 + a1 * Pant[i], sigma);
+      }
+      
     }" ,fill=TRUE)
 
 sink()
 
 ```
 
-## Fake Data: Assign weight with 50% each on lags day 1 and 2
+### Simulate Data: Assign weight with 50% each on lags day 1 and 2
 
 ```{r} 
 # set parameters
@@ -143,171 +146,293 @@ for (i in 2:100){
 for (i in 1:100){
   R[i] <- rnorm(1, R_mod[i], sigma_obs)
 }
-
-plot(P,R)
 ```
 
-## Parameter recovery:
+### Parameter recovery:
 ```{r}
+fit_fake <- readRDS('src/SAM/stan/fits/fit_fake.rds')
 
-# sim_dat <- list(R = R, P = P, N = length(P), nweight = 5, alpha = rep(1, 5))
-# fit_fake <- stan(file = 'src/SAM/stan/SAM.stan', 
-#                  data = sim_dat, 
-#                  warmup = 500, iter = 1000, 
-#                  chains = 4, cores = 4)
-
-fit_fake <- readRDS('C:/Users/Alice Carter/git/autotrophic_rivers/src/SAM/fit_fake.rda')
-
-print(fit_fake, pars=c("a", "b", "w", 'sigma_proc', 'sigma_obs'))
-plot(fit_fake, pars = c("a", "b", "w", 'sigma_proc', 'sigma_obs'))
-posterior <- extract(fit_fake)
+print(fit_fake$fit, pars=c("a0", "a1", "w"))
 
 ```
-### Troubleshooting
-- Several warnings including: divergent transitions, low Bayesian Fraction of Missing Information, largest R-hat is NA, bulk effective sample size is too low, tail effective sample size is too low.
-- It appears that the process error $\sigma_{proc}$, may be trading off with the observation error $\sigma_{obs}$
+### Test model performance on real data
 
-```{r, echo = F}
-plot(posterior$sigma_proc, posterior$sigma_obs, xlab = 'process error', 
-     ylab = 'observation error', main = 'joint distribution')
-```
-I am confused about how to correctly include both process and observation error in a model where I am not including an autoregressive term. In the Ogle paper examples, I don't think that the first model (where ANPP = f(precip)) includes both types of error. It includes a data model with observation error:
+To see how well we are capturing the dynamics of a real system, we test the basic SAM model on real data from east canyon creek.
 
-$$ ANPP \sim N(\mu, \sigma_{obs}) $$
 
-and a deterministic process model:
+```{r}
+east <- read_csv('data/east_metab.csv')
+fit <- readRDS('src/SAM/stan/fits/east_sam_fit.rds')
+R_hat <- summary(fit, pars = 'R_hat')$summary %>%
+  as_tibble() %>%
+  pull(mean)
 
-$$ \mu(t) = \alpha_0 + \alpha_1 Ev_{0-5}(t) + ... + \alpha_5 PPT_{ant}(t) $$
+# Do predictions correlate with data?
+plot(-east$ER, R_hat, xlab = 'measured ER', ylab = 'predicted ER',
+     main = 'SAM model predictions')
+abline(0,1)
 
-- I don't know how to set the first j values of modeled ER in the stan code and as a result the model is trying to fit them without any information. Additionally, the chains for several of the later respiration estimates are not converging:
 
-```{r, echo = FALSE}
-
-traceplot(fit_fake, pars = 'R_mod[1]')
-traceplot(fit_fake, pars = 'R_mod[10]')
 ```
 
+The predictions correlate reasonably well with the data, but we have not sufficiently captured the autocorrelation in respiration with this model.
 
-## Testing model integrating over different past time intervals:
+```{r}
+# are we accounting for all of the autocorrelation in the respiration?
+par(mfrow = c(1,2))
+acf(-east$ER, main = 'Autocorrelation of ER')
+acf(-east$ER - R_hat, main = 'Autocorrelation of ER residuals')
 
-In Ogle and Barber 2015, they integrate different drivers over different past time periods. As an initial test, I am implementing similar code to incorporate different past intervals of GPP including:
-- GPP on the same day
-- GPP on the previous day
-- GPP during the preceding week
-- GPP during the preceding month
+# No and it looks like the pattern in the ER residuals might be seasonal
+par(mfrow = c(1,1))
+plot(east$Date, -east$ER-R_hat, xlab = 'date', ylab = 'ER residuals')
 
-I realize the problem inherent in this is that the predictor variables are now nested, with yesterday's GPP included in each of the last three. For now I will still give it a try.
+```
 
-## Stan Code
-```{r, eval = FALSE}
-sink("src/SAM/stan/SAM_intervals.stan")
+The residuals suggest the model is underestimating the impact of GPP on ER in the spring and overestimating it in the fall. This makes ecological sense and is a good argument for running this model seasonally 
 
+
+### Simple autoregressive model
+
+Next, to compare to the results of the SAM model, I built a state space ar1 model of respiration.
+
+Stan code:
+```{r, eval = F}
+
+sink('src/SAM/stan/ar1_model.stan')
 cat("
-    data {
-      int <lower = 0> N;
-      vector [N] P;
-      vector [N] R;
-      int <lower = 0> nweight;
-      vector [nweight] alpha;
+  data {
+   int <lower = 0> N; // Sample size
+   vector[N] R;
+  }
+  
+  parameters {
+   real a0; // Intercept
+   real <lower = 0, upper = 1> a1; 
+   real <lower = 0> sigma_proc;
+   real <lower = 0> sigma_obs;
+   vector [N] mu;
+  }
+  
+  model {
+   mu[1] ~ normal(R[1], 0.01);
+   mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
+   R ~ normal(mu, sigma_obs);
+   
+   
+   a0 ~ normal(0,1);
+   a1 ~ uniform(0,1);
+   sigma_proc ~ normal(0,1) T[0,];
+   sigma_obs ~ normal(0,1) T[0,];
+  }
+  
+  generated quantities {
+    vector [N] R_hat;
+    vector [N] R_tilde;
+    R_hat[1] = R[1];
+    R_tilde[1] = R[1];
+    for(i in 2:N){
+        R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
+        R_tilde[i] = normal_rng(R_hat[i], sigma_obs);  
     }
-    
-    parameters {
-      real <lower =0> a;
-      real b;
-      simplex [nweight] w; 
-      real <lower=0> sigma_proc;
-      real <lower=0> sigma_obs;
-      vector [N] R_mod;
-    }
-    
-    transformed parameters{
-      vector  [N] Pant;
-      Pant[1:30] = P[1:30];
+  }", fill = T)
 
-      for (i in 31:N){
-        real Pweek;
-        real Pmonth;
-        Pweek = sum(P[(i-7):(i-1)])/7;
-        Pmonth = sum(P[(i-30):(i-1)])/30;
-        
-        Pant[i] = w[1]*P[i] + w[2]*P[i-1] + w[3]*Pweek + w[4]*Pmonth;
-        
-      }
-    }
-    
-    model {
-      for (i in 31:N){
-        R_mod[i] ~ normal(b+a*Pant[i], sigma_proc); // likelihood
-      }
-      
-      for (i in 1:N){
-        R[i] ~ normal(R_mod[i], sigma_obs);
-      }
-
-    b ~ normal(0,5); //priors
-    a ~ normal(0,1);
-    w ~ dirichlet(alpha);
-    sigma_obs ~ normal(0,1) T[0,];
-    sigma_proc ~ normal(0,1) T[0,];
-    }
-    
-    generated quantities{
-    
-    }" ,fill=TRUE)
 
 sink()
 ```
 
-## Fake Data
-In this case, I am building a dataset where the weights on today, yesterday and the past week are all 1/3 and the weight on the past month is zero:
+For this model, I am struggling to recover the parameters as well as for the SAM model. Using simulated data of a mean reverting random walk with 0.5 process error and o.2 observation error:
 
 ```{r}
-# set parameters
-a = 0.5
-b = 0
-w <- c(1/3,1/3,1/3,0)
+a0 = 1 # intercept
+a1 = 0.8 # ar1 coefficient
+sigma_proc = 0.5
 sigma_obs = 0.2
-sigma_proc = 0.2
 
-# generate data
-P <- numeric(365)
-R <- numeric(365)
-P[1] <- 10
-for (i in 2:365)
-  P[i] <- 1+0.9* P[i-1]+rnorm(1,0,0.85)
-
-Pant <- numeric(365)
-Pant[1:30]<-P[1:30]
-
-for (i in 31:365){
-  Pweek = sum(P[(i-7):(i-1)])/7
-  Pmonth = sum(P[(i-30):(i-1)])/30
-  Pant[i] = w[1]*P[i] + w[2]*P[i-1] + w[3]*Pweek + w[4]*Pmonth;
+mu <- numeric(100)
+mu[1] <- 5
+R = mu[1] + rnorm(1, 0, sigma_obs)
+for (i in 2:100){
+  mu[i] <- a0 + a1 * mu[i-1] + rnorm(1, 0, sigma_proc)
+  R[i] = mu[i] + rnorm(1, 0, 0.2)
 }
 
-
-R_mod <- b + a * P[1]
-for (i in 2:365){
-  R_mod[i] <- b + a*Pant[i] + rnorm(1, 0, sigma_proc)
-}
-for (i in 1:365){
-  R[i] <- rnorm(1, R_mod[i], sigma_obs)
-}
-
-plot(P,R)
-
-fit_fake2 <- readRDS('C:/Users/Alice Carter/git/autotrophic_rivers/src/SAM/fit_fake2.rda')
-print(fit_fake2, pars=c("a", "b", "w", 'sigma_proc', 'sigma_obs'))
-plot(fit_fake2, pars = c("a", "b", "w", 'sigma_proc', 'sigma_obs'))
+fit <- readRDS('src/SAM/stan/fits/simulated_ar1_fit.rds')
+plot(fit$fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
 
 ```
 
-While the model is able to recover the parameters fairly well, several problems come up here, including all of the same warnings as above. Additionally, there is a large amount of uncertainty in the intercept and  both the process and observation errors.
+This model tends to overestimate the intercept and have a large uncertainty surrounding that estimate. It also gives the following warnings from fitting:
+- divergent transitions
+- low bayesian fraction of missing information
+- largest Rhat is NA
+- low bulk effective sample size
+- low tail effective sample size
+
+I am not sure how concerned I should be about these warnings, or if this recovery of parameters from simulated data is sufficient. It would be great to discuss.
+
+```{r}
+R_hat <- summary(fit$fit, pars = 'R_hat')$summary %>%
+  as_tibble() %>%
+  pull(mean)
+pp <- summary(fit$fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))$summary %>%
+  as_tibble() %>%
+  pull(mean)
+
+mu <- numeric(100)
+mu[1] <- 5
+R_hat = mu[1] + rnorm(1, 0, pp[4])
+for (i in 2:100){
+  mu[i] <- pp[1] + pp[2] * mu[i-1] + rnorm(1, 0, pp[3])
+  R_hat[i] = mu[i] + rnorm(1, 0, pp[4])
+}
+R <- fit$dat$R
+plot(R, R_hat)
+abline(0,1)
+
+par(mfrow = c(1,2))
+acf(R, main = 'Autocorrelation of ER')
+acf(R - R_hat, main = 'Autocorrelation of ER residuals')
+
+```
+
+In this case, the autocorrelation of the residuals is not accounted for in the model, but I don't think it should be in a simple random walk model. Even in the parameters were recovered perfectly the autocorrelation of the estimates will be different than in the original data and will therefore still be present in the residuals. Next, I attempted to merge these two models and build a state space, ar1 model with GPP as an antecedent predictor. Below, I compare the results of running the East Canyon creek data in the basic SAM model, the ar1 model, and the combined model to see if we do any better at estimating ER.
+
+### Model Comparison with real data
+
+Stan code for combined SAM and ar1 model
+```{r, eval = FALSE}
+
+sink("src/SAM/stan/SAM_ar1.stan")
+
+cat("
+
+data {
+ int <lower = 0> N;
+ vector[N] R;
+ vector [N] P;
+ int <lower = 0> nweight;
+ vector [nweight] alpha;
+}
+
+parameters {
+ real a0; // Intercept
+ real < lower = 0, upper = 1> a1; 
+ real <lower =0> a2;
+ real < lower = 0 > sigma_obs;
+ real < lower = 0 > sigma_proc;
+ simplex [nweight] w; 
+ vector [N] mu;
+}
+
+transformed parameters{
+ vector  [N] Pant;
+ Pant[1:5] = P[1:5];
+
+ for (i in 6:N){
+   vector  [nweight] Pvec;
+   for(j in 1:nweight){ 
+     Pvec[j]=w[j]*P[i-(j-1)];
+   }
+   Pant[i]=sum(Pvec);
+ }
+}
+
+model {
+ mu[1:5] ~ normal(R[1:5], 0.01);
+ for (i in 6:N){
+  mu[i] ~ normal(a0 + a1 * mu[i-1] + a2*Pant[i], sigma_proc);
+  R[i] ~ normal(mu[i], sigma_obs);
+ }
+
+ a0 ~ normal(0,5); //priors
+ a1 ~ uniform(0,1);
+ a2 ~ normal(0,1) T[0,];
+ w ~ dirichlet(alpha);
+ sigma_obs ~ normal(0,1) T[0,];
+ sigma_proc ~ normal(0,1) T[0,];
+}
+
+generated quantities {
+  vector [N] R_hat;
+  R_hat[1:5] = R[1:5];
+  for(i in 6:N){
+    R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1] + a2*Pant[i], sigma_proc);
+  }
+  
+}", fill = T)
+sink()
+
+```
+
+In the simulated data for this model, I set the parameters as follows:
+
+$a_0 = 0$, intercept
+
+$a_1 = 0.7$, autoregressive coefficient
+
+$a_2 = 0.3$, antecedent model coefficient
+
+$w <- c(0.5,0.5,0,0,0)$, weights on previous days
+
+$\sigma_{proc} = 0.5$
+
+$\sigma_{obs} = 0.2$
+
+Again, I was able to recover the parameters, but with considerable uncertainty in the value of the intercept and in the weights on prior values of GPP.
+
+```{r, include = FALSE}
+fit <- readRDS('src/SAM/stan/fits/simulated_sam_ar1.rds')
+plot(fit$fit, pars = c('a0','a1','a2','w','sigma_proc','sigma_obs'))
+```
+
+Comparing the model performance across all three models on East Canyon Creek data:
+
+### AR1 model
+```{r}
+fit_ar1 <- readRDS('src/SAM/stan/fits/east_ar1_fit.rds')
+#plot(fit_ar1, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
+print(fit_ar1, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
+
+R_hat_ar1 <- summary(fit_ar1, pars = 'R_hat')$summary[,1]
+```
+
+where $a0$ is the intercept and $a1$ is the ar1 coefficient.
+
+### Stochastic Antecedent Model
+```{r}
+fit_sam <- readRDS('src/SAM/stan/fits/east_sam_fit.rds')
+#plot(fit_sam, pars = c('a0', 'a1', 'w'))
+print(fit_sam, pars = c('a0', 'a1', 'w'))
+R_hat_sam <- summary(fit_sam, pars = 'R_hat')$summary[,1]
+```
+
+where $a0$ is the intercept, $a1$ is the coefficient on antecedent conditions in GPP, and $w$ are the weights on the current and preceding days GPP.
+
+### Combined model
+```{r}
+fit_comb <- readRDS('src/SAM/stan/fits/east_combined_fit.rds')
+#plot(fit_comb, pars = c('a0', 'a1', 'a2', 'w', 'sigma_proc', 'sigma_obs'))
+print(fit_comb, pars = c('a0', 'a1', 'a2', 'w', 'sigma_proc', 'sigma_obs'))
+R_hat_comb <- summary(fit_comb, pars = 'R_hat')$summary[,1]
+
+```
+
+where $a0$ is the intercept, $a1$ is the autoregressive coefficient, $a2$ is the coefficient on anteceded conditions in GPP, and $w$ are the weights on the current and preceding days GPP.
+
+## East Canyon Creek
+![](/figures/east_model_comp.jpeg)
+
+## Pecos River
+![](/figures/pecos_model_comp.jpeg)
+
+## Grand River
+![](/figures/grand_model_comp.jpeg)
+
+## Snake River
+![](/figures/snake_model_comp.jpeg)
+
 
 ## Next:
-1. Finish state space implementation
-  - figure out why observation error is trading off with process error
-  - how to set first five latent states
-2. Test models on more datasets
-3. Compare results to a simple autoregressive model
-4. Incorporate a missing data model 
+1. Refine combined model
+2. Model comparison
