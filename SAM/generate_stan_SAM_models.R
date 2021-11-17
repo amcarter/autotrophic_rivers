@@ -130,38 +130,39 @@ acf(R - R_hat, main = 'Autocorrelation of ER residuals')
 sink('src/SAM/stan/ar1_model.stan')
 cat("
   data {
-   int <lower = 0> N; // Sample size
-   vector[N] R;
+    int <lower = 0> N; // Sample size
+    vector[N] logR;
+    real mu_obs;
   }
   
   parameters {
-   real a0; // Intercept
-   real <lower = 0, upper = 1> a1; 
-   real <lower = 0> sigma_proc;
-   real <lower = 0> sigma_obs;
-   vector [N] mu;
+    real a0; // Intercept
+    real <lower = 0, upper = 1> a1; 
+    real <lower = 0> sigma_proc;
+    real <lower = 0> sigma_obs;
+    vector <lower = 0> [N] mu;
   }
   
   model {
-   mu[1] ~ normal(R[1], 0.01);
-   mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
-   R ~ normal(mu, sigma_obs);
+    mu[1] ~ normal(exp(logR[1]), 0.1);
+    mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
+    logR ~ normal(log(mu), sigma_obs);
    
    
-   a0 ~ normal(0,1);
-   a1 ~ uniform(0,1);
-   sigma_proc ~ normal(0,1) T[0,];
-   sigma_obs ~ normal(0,1) T[0,];
+    a0 ~ normal(0,1);
+    a1 ~ uniform(0,1);
+    sigma_proc ~ normal(0,1) T[0,];
+    sigma_obs ~ normal(mu_obs, mu_obs/2) T[0,];
   }
   
   generated quantities {
     vector [N] R_hat;
     vector [N] R_tilde;
-    R_hat[1] = R[1];
-    R_tilde[1] = R[1];
+    R_hat[1] = exp(logR[1]);
+    R_tilde[1] = logR[1];
     for(i in 2:N){
-        R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
-        R_tilde[i] = normal_rng(R_hat[i], sigma_obs);  
+      R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
+      R_tilde[i] = normal_rng(log(R_hat[i]), sigma_obs);  
     }
   }", fill = T)
 
@@ -171,21 +172,23 @@ sink()
 # simulate data
 a0 = 1
 a1 = 0.8
-sigma_proc = 0.5
-sigma_obs = 0.2
+sigma_proc = 0.2
+sigma_obs = 0.1
 
 mu <- numeric(100)
 mu[1] <- 5
-R = mu[1] + rnorm(1, 0, sigma_obs)
+R = log(mu[1]) + rnorm(1, 0, sigma_obs)
 for (i in 2:100){
   mu[i] <- a0 + a1 * mu[i-1] + rnorm(1, 0, sigma_proc)
-  R[i] = mu[i] + rnorm(1, 0, 0.2)
+  R[i] = log(mu[i]) + rnorm(1, 0, 0.2)
 }
 
 plot(mu, type = 'l')
-points(R)
+points(exp(R))
 
-sim_dat <- list(R = R, N = length(R))
+plot(mu, abs(exp(R) - mu))
+
+sim_dat <- list(logR = R, N = length(R), mu_obs = sigma_obs)
 fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
             warmup = 500, iter = 5000, 
             chains = 4, cores = 4)
@@ -193,9 +196,10 @@ fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
 
 saveRDS(list(fit = fit, dat = sim_dat), 'src/SAM/stan/fits/simulated_ar1_fit.rds')
 print(fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
+plot(fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
 
-post <- extract(fit)
-plot(post$a0, post$a1)
+pairs(fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
+
 launch_shinystan(fit)
 
 # Combined SAM and autoregressive model ####
@@ -205,60 +209,63 @@ sink("src/SAM/stan/SAM_ar1.stan")
 
 cat("
 
-data {
- int <lower = 0> N;
- vector[N] R;
- vector [N] P;
- int <lower = 0> nweight;
- vector [nweight] alpha;
-}
-
-parameters {
- real a0; // Intercept
- real < lower = 0, upper = 1> a1; 
- real <lower =0> a2;
- real < lower = 0 > sigma_obs;
- real < lower = 0 > sigma_proc;
- simplex [nweight] w; 
- vector [N] mu;
-}
-
-transformed parameters{
- vector  [N] Pant;
- Pant[1:5] = P[1:5];
-
- for (i in 6:N){
-   vector  [nweight] Pvec;
-   for(j in 1:nweight){ 
-     Pvec[j]=w[j]*P[i-(j-1)];
-   }
-   Pant[i]=sum(Pvec);
- }
-}
-
-model {
- mu[1:5] ~ normal(R[1:5], 0.01);
- for (i in 6:N){
-  mu[i] ~ normal(a0 + a1 * mu[i-1] + a2*Pant[i], sigma_proc);
-  R[i] ~ normal(mu[i], sigma_obs);
- }
-
- a0 ~ normal(0,5); //priors
- a1 ~ uniform(0,1);
- a2 ~ normal(0,1) T[0,];
- w ~ dirichlet(alpha);
- sigma_obs ~ normal(0,1) T[0,];
- sigma_proc ~ normal(0,1) T[0,];
-}
-
-generated quantities {
-  vector [N] R_hat;
-  R_hat[1:5] = R[1:5];
-  for(i in 6:N){
-    R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1] + a2*Pant[i], sigma_proc);
+  data {
+   int <lower = 0> N;
+   vector[N] R;
+   vector [N] P;
+   int <lower = 0> nweight;
+   vector [nweight] alpha;
+   real mu_obs;
+   real tau_obs;
+  
   }
   
-}", fill = T)
+  parameters {
+   real a0; // Intercept
+   real < lower = 0, upper = 1> a1; 
+   real <lower =0> a2;
+   real < lower = 0 > sigma_obs;
+   real < lower = 0 > sigma_proc;
+   simplex [nweight] w; 
+   vector [N] mu;
+  }
+  
+  transformed parameters{
+   vector  [N] Pant;
+   Pant[1:5] = P[1:5];
+  
+   for (i in 6:N){
+     vector  [nweight] Pvec;
+     for(j in 1:nweight){ 
+       Pvec[j]=w[j]*P[i-(j-1)];
+     }
+     Pant[i]=sum(Pvec);
+   }
+  }
+  
+  model {
+   mu[1:5] ~ normal(R[1:5], 0.01);
+   for (i in 6:N){
+    mu[i] ~ normal(a0 + a1 * mu[i-1] + a2*Pant[i], sigma_proc);
+    R[i] ~ normal(mu[i], sigma_obs);
+   }
+  
+   a0 ~ normal(0,5); //priors
+   a1 ~ uniform(0,1);
+   a2 ~ normal(0,1) T[0,];
+   w ~ dirichlet(alpha);
+   sigma_obs ~ normal(mu_obs,tau_obs) T[0,];
+   sigma_proc ~ normal(0,1) T[0,];
+  }
+  
+  generated quantities {
+    vector [N] R_hat;
+    R_hat[1:5] = R[1:5];
+    for(i in 6:N){
+      R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1] + a2*Pant[i], sigma_proc);
+    }
+    
+  }", fill = T)
 sink()
 
 # Fake Data: Assign weight with 50% each on lags day 1 and 2

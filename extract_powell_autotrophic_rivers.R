@@ -11,17 +11,54 @@ library(lubridate)
 # read in compiled Powell center data:
 dat <- 
   read_csv('../loticlentic_synthesis/data/powell_data_import/compiled_daily_model_results.csv')
+
+# Remove negative GPP, posative ER, and Rhat > 1.05
+filtered <- dat %>%
+  mutate(GPP = case_when(GPP.Rhat >1.05 ~ NA_real_,
+                         GPP >= 0 ~ GPP,
+                         TRUE ~ NA_real_),
+         ER = case_when(ER.Rhat >1.05 ~ NA_real_,
+                        ER <= 0 ~ ER,
+                        TRUE ~ NA_real_))
+
+# only keep years that have at least 25% of the days
+exc <- filtered %>%
+  mutate(year = year(date)) %>%
+  group_by(site_name, year) %>%
+  summarize(GPP_days = sum(!is.na(GPP))/365,
+            ER_days = sum(!is.na(ER))/365) %>%
+  ungroup() %>%
+  filter(GPP_days < 0.25 | ER_days < 0.25) %>%
+  mutate(siteyear = paste0(site_name, year))
+  
+filtered <- filtered %>%
+  mutate(year = year(date),
+         siteyear = paste0(site_name, year)) %>%
+  filter(!(siteyear %in% unique(exc$siteyear)) ) %>%
+  select(-siteyear)
+
+write_csv(filtered, 'data/filtered_powell_data_25.csv') 
+
 # This is the most updated filled dataset taht was used in the SP paper, 
-# I got it from Mike V:
-filled_dat <- read_csv('../loticlentic_synthesis/data/sp_full.csv')%>%
-  rename(year = Year)
-  # readRDS('../oxygen_timeseries/data/gapPhilled_data.rds')
+# I got it from Mike V 11/2021:
+
+phil_data <- read_csv('../loticlentic_synthesis/data/phil_powell_data/lotic_gap_filled_unlisted.csv')
+tmp <- phil_data %>%
+  group_by(sitecode) %>%
+  mutate(GPP = zoo::na.approx(GPP, x = Date, na.rm = F ))
+# linear interpolation does not match Phil's gap filling. This needs to be 
+# addressed before deciding how to get annual NEP if I am going to use that.
+
+plot(filtered$ER, filtered$GPP)
+points(phil_data$ER, phil_data$GPP, col = alpha(2, 0.3), pch = 20)
+
+# readRDS('../oxygen_timeseries/data/gapPhilled_data.rds')
 # is there more metadata somewhere?
 site_dat <- 
   readRDS('../loticlentic_synthesis/data/phil_powell_data/lotic_site_info_full.rds') %>%
   rename(sitecode = Site_ID)
 
-
+#### start here ####
 # Summarize by site years
 annual <- dat %>% 
   mutate(year = year(date)) %>%
