@@ -4,6 +4,8 @@
 setwd("C:/Users/Alice Carter/git/autotrophic_rivers")
 library(rstan)
 library(shinystan)
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TURE)
 #
 # Basic SAM code ####
 # ER as a function of GPP on days t-4:t
