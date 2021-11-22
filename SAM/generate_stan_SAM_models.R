@@ -133,65 +133,99 @@ sink('src/SAM/stan/ar1_model.stan')
 cat("
   data {
     int <lower = 0> N; // Sample size
-    vector[N] logR;
-    real mu_obs;
+    vector[N] R_obs;
   }
   
   parameters {
     real a0; // Intercept
-    real <lower = 0, upper = 1> a1; 
+    real <lower = 0, upper = 1> a1; //phi
     real <lower = 0> sigma_proc;
     real <lower = 0> sigma_obs;
-    vector <lower = 0> [N] mu;
+    vector <lower = 0> [N] R;
   }
   
   model {
-    mu[1] ~ normal(exp(logR[1]), 0.1);
-    mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
-    logR ~ normal(log(mu), sigma_obs);
-   
+    R[1] ~ normal(R_obs[1], 0.1);
+    R[2:N] ~ normal(a0 + a1 * R[1:(N-1)], sigma_proc);
+    R_obs ~ normal(R, sigma_obs);
    
     a0 ~ normal(0,1);
     a1 ~ uniform(0,1);
     sigma_proc ~ normal(0,1) T[0,];
-    sigma_obs ~ normal(mu_obs, mu_obs/2) T[0,];
+    sigma_obs ~ normal(0,1) T[0,];
   }
   
   generated quantities {
     vector [N] R_hat;
     vector [N] R_tilde;
-    R_hat[1] = exp(logR[1]);
-    R_tilde[1] = logR[1];
-    for(i in 2:N){
-      R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
-      R_tilde[i] = normal_rng(log(R_hat[i]), sigma_obs);  
+    R_hat[1] = R_obs[1];
+    R_tilde[1] = normal_rng(R_obs[1], sigma_obs);
+    R_hat[2:N] = normal_rng(a0 + a1 * R_hat[1:(N-1)], sigma_proc);
+    R_tilde = normal_rng(R_hat, sigma_obs);  
     }
   }", fill = T)
 
 
 sink()
 
-# simulate data
-a0 = 1
-a1 = 0.8
-sigma_proc = 0.2
-sigma_obs = 0.1
+sink('src/SAM/stan/ar1_model_lognormal.stan')
+cat("
+   data {
+    int <lower = 0> N; // Sample size
+    vector[N] R_obs;
+    real mu_obs;
+  }
+  
+  parameters {
+    real a0; // Intercept
+    real <lower = 0, upper = 1> a1; //phi
+    real <lower = 0> sigma_proc;
+    real <lower = 0> sigma_obs;
+    vector <lower = 0> [N] R;
+  
+  }
+  
+  model {
+    R[1] ~ lognormal(log(R_obs[1]), 0.05);
+    for(t in 2:N){
+      R[t] ~ lognormal(log(a0 + a1 * R[t-1]), sigma_proc);
+      R_obs[t] ~ lognormal(log(R[t]), sigma_obs);
+    }
+   
+    a0 ~ normal(0,1);
+    a1 ~ uniform(0,1);
+    sigma_proc ~ normal(0,0.2) T[0,];
+    sigma_obs ~ normal(mu_obs, mu_obs/2) T[0,];
+  }
+  
+  generated quantities {
+    
+  }", fill = T)
 
-mu <- numeric(100)
-mu[1] <- 5
-R = log(mu[1]) + rnorm(1, 0, sigma_obs)
+
+sink()
+
+# simulate data
+
+a0 <- 2
+a1 <- 0.8
+sigma_proc <- 0.05
+sigma_obs <- 0.05
+
+R <- numeric(100)
+R_obs <- numeric(100)
+R[1] <- 10
+R_obs[1] =  rlnorm(1, log(R[1]), sigma_obs)
 for (i in 2:100){
-  mu[i] <- a0 + a1 * mu[i-1] + rnorm(1, 0, sigma_proc)
-  R[i] = log(mu[i]) + rnorm(1, 0, 0.2)
+  R[i] <- rlnorm(1, log(a0 + a1 * R[i-1]), sigma_proc)
+  R_obs[i] = rlnorm(1, log(R[i]), sigma_obs)
 }
 
-plot(mu, type = 'l')
-points(exp(R))
+plot(R, type = 'l')
+points(R_obs)
 
-plot(mu, abs(exp(R) - mu))
-
-sim_dat <- list(logR = R, N = length(R), mu_obs = sigma_obs)
-fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
+sim_dat <- list(R_obs = R_obs, N = length(R_obs), mu_obs = sigma_obs)
+fit <- stan(file = 'src/SAM/stan/ar1_model_lognormal.stan', data = sim_dat,
             warmup = 500, iter = 5000, 
             chains = 4, cores = 4)
 
