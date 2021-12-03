@@ -1,37 +1,41 @@
 
   data {
     int <lower = 0> N; // Sample size
-    vector[N] logR;    // log ER observed
-    real mu_obs;       // prior mean for obs error
+    vector[N] R_obs;   // time series of observations
   }
   
   parameters {
     real a0; // Intercept
-    real <lower = 0, upper = 1> a1; 
-    real <lower = 0> sigma_proc;
-    real <lower = 0> sigma_obs;
-    vector <lower = 0> [N] mu; // State variable for ER
+    real <lower = 0, upper = 1> phi; //ar1 coeff
+    real <lower = 0> sigma_proc;    //process error
+    real <lower = 0> sigma_obs;     //observation error
+    vector <lower = 0> [N] R;       //state vector
   }
   
   model {
-    mu[1] ~ normal(exp(logR[1]), 0.1);
-    mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
-    logR ~ normal(log(mu), sigma_obs);
+    // initial state
+    R[1] ~ normal(R_obs[1], sigma_proc);
+    
+    // process model
+    R[2:N] ~ normal(a0 + phi * R[1:(N-1)], sigma_proc);
+    
+    //observation model
+    R_obs ~ normal(R, sigma_obs);
    
-    // priors
+    //priors
     a0 ~ normal(0,1);
-    a1 ~ uniform(0,1);
+    phi ~ beta(1,1);
     sigma_proc ~ normal(0,1) T[0,];
-    sigma_obs ~ normal(mu_obs, mu_obs/2) T[0,];
+    sigma_obs ~ normal(0,1) T[0,];
   }
   
   generated quantities {
-    vector [N] R_hat;   // estimated underlying state
-    vector [N] R_tilde; // estimated log ER obs
-    R_hat[1] = exp(logR[1]);
-    R_tilde[1] = logR[1];
+    vector [N] R_hat;
+    vector [N] R_tilde;
+    R_hat[1] = R_obs[1];
+    R_tilde[1] = normal_rng(R_obs[1], sigma_obs);
     for(i in 2:N){
-      R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
-      R_tilde[i] = normal_rng(log(R_hat[i]), sigma_obs);  
+      R_hat[i] = normal_rng(a0 + phi * R_hat[i-1], sigma_proc);
+      R_tilde[i] = normal_rng(R_hat[i], sigma_obs);  
     }
   }

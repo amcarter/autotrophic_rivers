@@ -1,10 +1,10 @@
 ---
 title: "State space SAM"
-author: "alice carter"
+author: "Alice Carter"
 date: "10/27/2021"
 output: html_document
 editor_options: 
-  chunk_output_type: console
+chunk_output_type: console
 ---
 
 ```{r setup, include = FALSE}
@@ -22,6 +22,9 @@ Question: To what extent does ecosystem respiration in rivers retain memory of p
 Hypotheses:
 Rivers with higher fluxes of primary productivity will derive a greater portion of their respiration from autochthonous production, resulting in a possibility for ecological memory of productivity in respiration fluxes. Community dynamics will determine the likelihood of a time lag with phytoplankton dominated communities deriving most of their respiration from that days productivity and benthic, macrophyte dominated comunities demonstrating time lags in the response of ER to GPP.
 
+## Snake River Metabolism
+![](/Users/Alice Carter/git/autotrophic_rivers/figures/snake_data.png){width=80%}
+
 Goals: 
 1. Take a simple SAM model of ER as a function of the previous five days of GPP and add observation error. 
 2. Test different time intervals of GPP memory
@@ -31,24 +34,24 @@ Goals:
 
 Based on Ogle and Barber 2015, adapted from code by Bob Hall.
 
-Model respiration ($R$) as a linear function of GPP on prior days:
+Model the underlying state of respiration ($R$) as a linear function of GPP on prior days:
 
-$$R_t = b + a P^{ant}_t + \varepsilon_t$$
+$$R_t = \beta_0 + \beta_1 P^{ant}_t + \varepsilon_t$$
 
 where $P_ant$ is a function of the previous j days of productivity (j = 0 is the current day)
 
 $$P^{ant}_t = \displaystyle\sum_{j=0}^{J} w_j P_{t-j} $$
 
-and process error is incorporated as:
+and process and observation error are incorporated as:
 
 $$\varepsilon_t \sim N (0, \sigma_{proc})$$
 
-To make this a state space model, we model our observations of respiration, $R_{obs,t}$, as a function of the unobserved latent state, $R_t$.
 
 $$ R_{obs,t} \sim N (R_t, \sigma_{obs})$$
 
 Priors are minimally informative, but a special prior on $w$, which is a simplex 
 
+$$\sigma_{proc} \sim $$
 $$w \sim dirichlet(1,1,...1)$$
 
 ### Stan Code

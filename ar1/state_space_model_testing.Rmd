@@ -1,0 +1,136 @@
+---
+title: "AR1 model using log ER"
+author: "alice carter"
+date: "11/20/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
+library(rstan)
+```
+
+Problem: the uncertainty in estimates of ER scale with the magnitude of ER
+
+Solution: model the logarithm of ER
+
+Issues: I get errors when I rewrite the stan ar1 model so that the observation error is incorporated on the log of respiration, where $R$ is observed respiration and $mu$ is the underlying state variable as:
+
+$$ log(R) \sim Normal(log(mu), \sigma_{obs})$$
+
+Here I have included the revised stan code and simulated data I am using to test it as well as the errors I am getting when I try to run the model.
+
+### Stan Code
+
+```{r, eval = FALSE}
+
+sink('src/SAM/stan/ar1_model.stan')
+cat("
+  data {
+    int <lower = 0> N; // Sample size
+    vector[N] logR;    // log ER observed
+    real mu_obs;       // prior mean for obs error
+  }
+  
+  parameters {
+    real a0; // Intercept
+    real <lower = 0, upper = 1> a1; 
+    real <lower = 0> sigma_proc;
+    real <lower = 0> sigma_obs;
+    vector <lower = 0> [N] mu; // State variable for ER
+  }
+  
+  model {
+    mu[1] ~ normal(exp(logR[1]), 0.1);
+    mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
+    logR ~ normal(log(mu), sigma_obs);
+   
+    // priors
+    a0 ~ normal(0,1);
+    a1 ~ uniform(0,1);
+    sigma_proc ~ normal(0,1) T[0,];
+    sigma_obs ~ normal(mu_obs, mu_obs/2) T[0,];
+  }
+  
+  generated quantities {
+    vector [N] R_hat;   // estimated underlying state
+    vector [N] R_tilde; // estimated log ER obs
+    R_hat[1] = exp(logR[1]);
+    R_tilde[1] = logR[1];
+    for(i in 2:N){
+      R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
+      R_tilde[i] = normal_rng(log(R_hat[i]), sigma_obs);  
+    }
+  }", fill = T)
+
+sink()
+
+```
+
+### Simulated Data
+
+```{r}
+a0 = 1    # intercept
+a1 = 0.8  # ar1 coefficient
+sigma_proc = 0.2
+sigma_obs = 0.1
+
+mu <- numeric(100)  # ER state variable
+mu[1] <- 5
+
+# Observed ER, on a log scale
+R = log(mu[1]) + rnorm(1, 0, sigma_obs)
+for (i in 2:100){
+  mu[i] <- a0 + a1 * mu[i-1] + rnorm(1, 0, sigma_proc)
+  R[i] = log(mu[i]) + rnorm(1, 0, 0.2)
+}
+
+# compare state variable and observations
+par(mfrow = c(1,2))
+
+plot(mu, type = 'l')
+points(exp(R))
+
+# does variance scale with ER?
+plot(mu, abs(exp(R) - mu), xlab = 'ER', ylab = 'obs error')
+
+```
+
+### Run Model
+
+```{r}
+sim_dat <- list(logR = R, N = length(R), mu_obs = sigma_obs)
+fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
+            warmup = 500, iter = 1000, 
+            chains = 4, cores = 4)
+
+```
+
+
+
+The error suggests running with only one chain to debug. Doing that gives the following errors:
+
+```{r}
+fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
+            warmup = 500, iter = 1000, 
+            chains = 1, cores = 4)
+```
+
+It looks like there is a problem with my generated quatnities, but I am not sure why there is a problem with the way it is specified. Taking the generated quantities out of the model and rerunning it gives me this:
+
+### Model without generated quantities block
+
+```{r}
+fit <- stan(file = 'src/SAM/stan/ar1_model_nogq.stan', data = sim_dat,
+            warmup = 500, iter = 1000, 
+            chains = 4, cores = 4)
+```
+I'm still getting a lot of warnings, and I am not doing a great job recovering my parameters (true values shown below as red triangles). Additionally, the posteriors for a0 and a1 are very highly correlated. Any advice about how I should be changing the model to incorporate log(ER) would be helpful.
+```{r}
+p <- rstan::plot(fit, show_density = T, fill_color = 'grey',
+                 pars = c('a0', 'a1', 'sigma_obs', 'sigma_proc'))
+dd <- data.frame(x = c(1, 0.8, 0.1, 0.2), y = c(4,3,2,1))
+p + geom_point(data = dd, aes(x = x, y = y), size = 3, shape = 17, col = 'brown3')
+
+pairs(fit, pars = c('a0', 'a1', 'sigma_obs', 'sigma_proc'))

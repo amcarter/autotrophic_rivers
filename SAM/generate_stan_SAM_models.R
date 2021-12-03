@@ -2,6 +2,7 @@
 # base model is from Bob Hall
 # 10/25/2021
 setwd("C:/Users/Alice Carter/git/autotrophic_rivers")
+source('src/stan_helpers.R')
 library(rstan)
 library(shinystan)
 options(mc.cores = parallel::detectCores())
@@ -127,30 +128,36 @@ acf(R - R_hat, main = 'Autocorrelation of ER residuals')
 
 
 
-# basic autoregressive model ####
+# Basic autoregressive model ####
 
 sink('src/SAM/stan/ar1_model.stan')
 cat("
   data {
     int <lower = 0> N; // Sample size
-    vector[N] R_obs;
+    vector[N] R_obs;   // time series of observations
   }
   
   parameters {
     real a0; // Intercept
-    real <lower = 0, upper = 1> a1; //phi
-    real <lower = 0> sigma_proc;
-    real <lower = 0> sigma_obs;
-    vector <lower = 0> [N] R;
+    real <lower = 0, upper = 1> phi; //ar1 coeff
+    real <lower = 0> sigma_proc;    //process error
+    real <lower = 0> sigma_obs;     //observation error
+    vector <lower = 0> [N] R;       //state vector
   }
   
   model {
-    R[1] ~ normal(R_obs[1], 0.1);
-    R[2:N] ~ normal(a0 + a1 * R[1:(N-1)], sigma_proc);
+    // initial state
+    R[1] ~ normal(R_obs[1], sigma_proc);
+    
+    // process model
+    R[2:N] ~ normal(a0 + phi * R[1:(N-1)], sigma_proc);
+    
+    //observation model
     R_obs ~ normal(R, sigma_obs);
    
+    //priors
     a0 ~ normal(0,1);
-    a1 ~ uniform(0,1);
+    phi ~ beta(1,1);
     sigma_proc ~ normal(0,1) T[0,];
     sigma_obs ~ normal(0,1) T[0,];
   }
@@ -160,52 +167,56 @@ cat("
     vector [N] R_tilde;
     R_hat[1] = R_obs[1];
     R_tilde[1] = normal_rng(R_obs[1], sigma_obs);
-    R_hat[2:N] = normal_rng(a0 + a1 * R_hat[1:(N-1)], sigma_proc);
-    R_tilde = normal_rng(R_hat, sigma_obs);  
+    for(i in 2:N){
+      R_hat[i] = normal_rng(a0 + phi * R_hat[i-1], sigma_proc);
+      R_tilde[i] = normal_rng(R_hat[i], sigma_obs);  
     }
   }", fill = T)
 
-
 sink()
 
-sink('src/SAM/stan/ar1_model_lognormal.stan')
-cat("
-   data {
-    int <lower = 0> N; // Sample size
-    vector[N] R_obs;
-    real mu_obs;
-  }
-  
-  parameters {
-    real a0; // Intercept
-    real <lower = 0, upper = 1> a1; //phi
-    real <lower = 0> sigma_proc;
-    real <lower = 0> sigma_obs;
-    vector <lower = 0> [N] R;
-  
-  }
-  
-  model {
-    R[1] ~ lognormal(log(R_obs[1]), 0.05);
-    for(t in 2:N){
-      R[t] ~ lognormal(log(a0 + a1 * R[t-1]), sigma_proc);
-      R_obs[t] ~ lognormal(log(R[t]), sigma_obs);
-    }
-   
-    a0 ~ normal(0,1);
-    a1 ~ uniform(0,1);
-    sigma_proc ~ normal(0,0.2) T[0,];
-    sigma_obs ~ normal(mu_obs, mu_obs/2) T[0,];
-  }
-  
-  generated quantities {
-    
-  }", fill = T)
+# simulate data linear model ####
+
+a0 <- 2
+a1 <- 0.8
+sigma_proc <- 1
+sigma_obs <- 0.5
+
+R <- numeric(100)
+R_obs <- numeric(100)
+R[1] <- 10
+R_obs[1] =  rnorm(1, R[1], sigma_obs)
+for (i in 2:100){
+  R[i] <- rnorm(1, a0 + a1 * R[i-1], sigma_proc)
+  R_obs[i] = rnorm(1, R[i], sigma_obs)
+}
 
 
-sink()
+# Plot simulated data####
+plot(R, type = 'l', xlab = 'time')
+points(R_obs)
+legend('topright', c('state', 'observations'), lty = c(1,0), pch = c(NA, 1), 
+       ncol = 2, bty = 'n')
 
-# simulate data
+sim_dat <- list(R_obs = R_obs, N = length(R_obs))#, mu_obs = sigma_obs)
+fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
+            warmup = 500, iter = 5000, 
+            chains = 4, cores = 4)
+
+
+# saveRDS(list(fit = fit, dat = sim_dat), 'src/SAM/stan/fits/simulated_ar1_fit.rds')
+traceplot(fit,pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'))
+print(fit, pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'))
+plot_post_sim(fit, pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'),
+              vals = c(a0, phi, sigma_proc, sigma_obs))
+
+y_rep <- as.matrix(fit, pars = 'R_tilde')
+bayesplot::ppc_dens_overlay(R_obs, y_rep[1:200,])
+
+pairs(fit, pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'))
+
+launch_shinystan(fit)
+# simulate data log model####
 
 a0 <- 2
 a1 <- 0.8
@@ -221,86 +232,80 @@ for (i in 2:100){
   R_obs[i] = rlnorm(1, log(R[i]), sigma_obs)
 }
 
-plot(R, type = 'l')
-points(R_obs)
-
-sim_dat <- list(R_obs = R_obs, N = length(R_obs), mu_obs = sigma_obs)
-fit <- stan(file = 'src/SAM/stan/ar1_model_lognormal.stan', data = sim_dat,
-            warmup = 500, iter = 5000, 
-            chains = 4, cores = 4)
-
-
-saveRDS(list(fit = fit, dat = sim_dat), 'src/SAM/stan/fits/simulated_ar1_fit.rds')
-print(fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
-plot(fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
-
-pairs(fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
-
-launch_shinystan(fit)
-
 # Combined SAM and autoregressive model ####
 
 
-sink("src/SAM/stan/SAM_ar1.stan")
+sink("src/SAM/stan/SAM_ar1_lognormal.stan")
 
 cat("
-
-  data {
-   int <lower = 0> N;
-   vector[N] R;
-   vector [N] P;
-   int <lower = 0> nweight;
-   vector [nweight] alpha;
-   real mu_obs;
-   real tau_obs;
-  
-  }
-  
-  parameters {
-   real a0; // Intercept
-   real < lower = 0, upper = 1> a1; 
-   real <lower =0> a2;
-   real < lower = 0 > sigma_obs;
-   real < lower = 0 > sigma_proc;
-   simplex [nweight] w; 
-   vector [N] mu;
-  }
-  
-  transformed parameters{
-   vector  [N] Pant;
-   Pant[1:5] = P[1:5];
-  
-   for (i in 6:N){
-     vector  [nweight] Pvec;
-     for(j in 1:nweight){ 
-       Pvec[j]=w[j]*P[i-(j-1)];
-     }
-     Pant[i]=sum(Pvec);
-   }
-  }
-  
-  model {
-   mu[1:5] ~ normal(R[1:5], 0.01);
-   for (i in 6:N){
-    mu[i] ~ normal(a0 + a1 * mu[i-1] + a2*Pant[i], sigma_proc);
-    R[i] ~ normal(mu[i], sigma_obs);
-   }
-  
-   a0 ~ normal(0,5); //priors
-   a1 ~ uniform(0,1);
-   a2 ~ normal(0,1) T[0,];
-   w ~ dirichlet(alpha);
-   sigma_obs ~ normal(mu_obs,tau_obs) T[0,];
-   sigma_proc ~ normal(0,1) T[0,];
-  }
-  
-  generated quantities {
-    vector [N] R_hat;
-    R_hat[1:5] = R[1:5];
-    for(i in 6:N){
-      R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1] + a2*Pant[i], sigma_proc);
+    data {
+      int <lower = 0> N; // Sample size
+      vector[N] R_obs;
+      vector [N] P;
+      real mu_obs;
+      int <lower = 0> nweight;
+      vector [nweight] alpha;
     }
     
+    parameters {
+     real a0; // Intercept
+     real <lower =0> a1;
+     real < lower = 0, upper = 1> phi; 
+     real < lower = 0 > sigma_obs;
+     real < lower = 0 > sigma_proc;
+     simplex [nweight] w; 
+     vector [N] R;
+    }
+    
+    transformed parameters{
+      vector  [N] Pant;
+      Pant[1:5] = P[1:5];
+  
+      for (i in 6:N){
+        vector  [nweight] Pvec;
+        for(j in 1:nweight){ 
+          Pvec[j]=w[j]*P[i-(j-1)];
+        }
+        Pant[i]=sum(Pvec);
+      }
+    }    
+    
+    model {
+      R[1:5] ~ lognormal(log(R_obs[1:5]), 0.05);
+      for(t in 6:N){
+        R[t] ~ lognormal(log(a0 + a1 * Pant[t] + phi * R[t-1]), sigma_proc);
+        R_obs[t] ~ lognormal(log(R[t]), sigma_obs);
+      }
+      
+      a0 ~ normal(0,1);
+      a1 ~ normal(0,1) T[0,];
+      phi ~ uniform(0,1);
+      w ~ dirichlet(alpha);
+      sigma_proc ~ normal(0,0.2) T[0,];
+      sigma_obs ~ normal(mu_obs, mu_obs/2) T[0,];
+    }
+
+  generated quantities {
+    vector [N] R_hat;
+    vector [N] R_tilde;
+    vector [N] Pant_hat;
+    
+    Pant_hat[1:5] = P[1:5];
+    for(i in 6:N){
+      vector [nweight] Pvec_hat;
+      for(j in 1:nweight){
+        Pvec_hat[j] = w[j]*P[i-(j-1)];
+      }
+      Pant_hat[i] = sum(Pvec_hat);
+    }
+    
+    R_hat[1:5] = R[1:5];
+    for(i in 6:N){
+      R_hat[i] = lognormal_rng(log(a0 + a1 * Pant_hat[i] + phi * R_hat[i-1]), sigma_proc);
+    }
+    for(i in 1:N){
+      R_tilde[i] = lognormal_rng(log(R_hat[i]), sigma_obs);
+    }    
   }", fill = T)
 sink()
 
@@ -308,18 +313,18 @@ sink()
 
 # set parameters
 a0 = 0
-a1 = 0.7
-a2 = 0.3
+a1 = 0.3
+phi = 0.7
 w <- c(0.5,0.5,0,0,0)
-sigma_proc = 0.5
-sigma_obs = 0.2
+sigma_proc = 0.05
+sigma_obs = 0.05
 
 # generate data
 P <- numeric(300)
 R <- numeric(300)
 P[1] <- 10
 for (i in 2:300)
-  P[i] <- 1+0.9* P[i-1]+rnorm(1,0,0.85)
+  P[i] <- rlnorm(1, log(1 + 0.9 * P[i-1]), 0.05)
 
 Pant <- numeric(300)
 Pant[1:5]<-P[1:5]
@@ -333,26 +338,36 @@ for (i in 6:300){
   
 }
 
-mu <- a0 + a1 * 5 + a2 *P[1]
-R = rnorm(1, mu, sigma_obs)
+R <- a0 + a1 * P[1] + phi * 5
+R_obs = rlnorm(1, log(R), sigma_obs)
 for (i in 2:300){
-  mu[i] = rnorm(1, a0 + a1*mu[i-1] + a2*Pant[i], sigma_proc)
-  R[i] = rnorm(1, mu[i], sigma_obs)
+  R[i] = rlnorm(1, log(a0 + a1 * Pant[i] + phi * R[i-1]), sigma_proc)
+  R_obs[i] = rlnorm(1, log(R[i]), sigma_obs)
 }
-plot(mu, type = 'l', ylim = c(2,12))
-points(R)
+plot(R, type = 'l', ylim = c(6,15))
+points(R_obs)
 lines(P, lty = 2)
 
 ## Run SAM model
-sim_dat <- list(R = R, P = P, N = length(P), nweight = 5, alpha = rep(1, 5))
-fit_fake <- stan(file = 'src/SAM/stan/SAM_ar1.stan',
+sim_dat <- list(R_obs = R_obs, P = P, N = length(P), mu_obs = 0.05, 
+                nweight = 5, alpha = rep(1, 5))
+fit_fake <- stan(file = 'src/SAM/stan/SAM_ar1_lognormal.stan',
                  data = sim_dat,
                  warmup = 500, iter = 1000,
-                 chains = 4, cores = 4)
-print(fit_fake, pars=c("a0", "a1", "a2", "w", 'sigma_proc', 'sigma_obs'))
-plot(fit_fake)
+                 chains = 1, cores = 4)
 
 saveRDS(list(fit = fit_fake, dat = sim_dat), 'src/SAM/stan/fits/simulated_sam_ar1.rds')
+
+print(fit_fake, pars=c("a0", "a1", "a2", "w", 'sigma_proc', 'sigma_obs'))
+
+# plot estimates vs true values
+p <- rstan::plot(fit, show_density = T, fill_color = 'grey',
+                 pars = c('a0', 'a1', 'sigma_obs', 'sigma_proc'))
+dd <- data.frame(x = c(a0, a1, sigma_obs, sigma_proc), y = c(4,3,2,1))
+p + geom_point(data = dd, aes(x = x, y = y), size = 3, shape = 17, col = 'brown3')
+
+pairs(fit, pars = c('a0', 'a1', 'sigma_obs', 'sigma_proc'))
+
 
 fit_fake <- readRDS('src/SAM/stan/fits/simulated_sam_ar1.rds')
 post <- extract(fit_fake)
