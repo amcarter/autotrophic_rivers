@@ -139,7 +139,7 @@ cat("
   
   parameters {
     real a0; // Intercept
-    real <lower = 0, upper = 1> phi; //ar1 coeff
+    real <lower = 0, upper = 1> phi;//ar1 coeff
     real <lower = 0> sigma_proc;    //process error
     real <lower = 0> sigma_obs;     //observation error
     vector <lower = 0> [N] R;       //state vector
@@ -178,16 +178,16 @@ sink()
 # simulate data linear model ####
 
 a0 <- 2
-a1 <- 0.8
+phi <- 0.8
 sigma_proc <- 1
-sigma_obs <- 0.5
+sigma_obs <- 0.3
 
 R <- numeric(100)
 R_obs <- numeric(100)
 R[1] <- 10
 R_obs[1] =  rnorm(1, R[1], sigma_obs)
 for (i in 2:100){
-  R[i] <- rnorm(1, a0 + a1 * R[i-1], sigma_proc)
+  R[i] <- rnorm(1, a0 + phi * R[i-1], sigma_proc)
   R_obs[i] = rnorm(1, R[i], sigma_obs)
 }
 
@@ -200,20 +200,20 @@ legend('topright', c('state', 'observations'), lty = c(1,0), pch = c(NA, 1),
 
 sim_dat <- list(R_obs = R_obs, N = length(R_obs))#, mu_obs = sigma_obs)
 fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
-            warmup = 500, iter = 5000, 
+            warmup = 500, iter = 1000, 
             chains = 4, cores = 4)
 
 
 # saveRDS(list(fit = fit, dat = sim_dat), 'src/SAM/stan/fits/simulated_ar1_fit.rds')
 traceplot(fit,pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'))
-print(fit, pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'))
+# print(fit, pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'))
 plot_post_sim(fit, pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'),
               vals = c(a0, phi, sigma_proc, sigma_obs))
+pairs(fit, pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs', 'lp__'))
 
 y_rep <- as.matrix(fit, pars = 'R_tilde')
 bayesplot::ppc_dens_overlay(R_obs, y_rep[1:200,])
 
-pairs(fit, pars = c('a0', 'phi', 'sigma_proc', 'sigma_obs'))
 
 launch_shinystan(fit)
 # simulate data log model####

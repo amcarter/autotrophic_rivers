@@ -1,54 +1,71 @@
 ---
 title: "AR1 model using log ER"
-author: "alice carter"
-date: "11/20/2021"
+author:
+date:
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set(root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
+# knitr::opts_knit$set(root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
+source('C:/Users/Alice Carter/git/autotrophic_rivers/src/stan_helpers.R')
 library(rstan)
 ```
 
-Problem: the uncertainty in estimates of ER scale with the magnitude of ER
+Goal: To build an AR1 model of log(ER)
 
-Solution: model the logarithm of ER
+I'm not completely confident in how I have made the transformation to a log model, input would be welcomed.
 
-Issues: I get errors when I rewrite the stan ar1 model so that the observation error is incorporated on the log of respiration, where $R$ is observed respiration and $mu$ is the underlying state variable as:
+### Process model:
 
-$$ log(R) \sim Normal(log(mu), \sigma_{obs})$$
+$$log(R_t) = \alpha_0 + \phi log(R_{t-1}) + w_t$$
+$$0 < \phi < 1$$
+$$w_t \sim normal(0, \sigma_{proc})$$
 
-Here I have included the revised stan code and simulated data I am using to test it as well as the errors I am getting when I try to run the model.
+Which can be rewritten as:
+$$R_t = e^{\alpha_0} R_{t-1}^{\phi} e^ {w_t}$$
+or,
+$$R_t = \beta_0R_{t-1}^\phi \epsilon_t$$
+$$\epsilon_t \sim lognormal(0, \sigma_{proc})$$
+
+### Observation model:
+
+$$R_{obs} = R * \epsilon_t$$
+$$\epsilon_t \sim lognormal(0, \sigma_{obs})$$
+
+or, 
+
+$$log(R_{obs}) = log(R) + w_t$$
+$$w_t \sim normal(0, \sigma_{obs})$$
 
 ### Stan Code
 
 ```{r, eval = FALSE}
 
-sink('src/SAM/stan/ar1_model.stan')
+sink('ar1_model_logR.stan')
 cat("
   data {
-    int <lower = 0> N; // Sample size
-    vector[N] logR;    // log ER observed
-    real mu_obs;       // prior mean for obs error
+    int <lower = 0> N;  // Sample size
+    vector[N] logR_obs; // log ER observed
+    real mu_obs;        // prior mean for obs error
   }
   
   parameters {
-    real a0; // Intercept
-    real <lower = 0, upper = 1> a1; 
+    real b0; // Intercept
+    real <lower = 0, upper = 1> phi; 
     real <lower = 0> sigma_proc;
     real <lower = 0> sigma_obs;
-    vector <lower = 0> [N] mu; // State variable for ER
+    vector <lower = 0> [N] logR; // State variable for ER
   }
   
   model {
-    mu[1] ~ normal(exp(logR[1]), 0.1);
-    mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
-    logR ~ normal(log(mu), sigma_obs);
+    logR[1] ~ normal(logR_obs[1], sigma_obs);
+    logR[2:N] ~ normal(b0 + phi * logR[1:(N-1)], sigma_proc);
+    logR_obs ~ normal(logR, sigma_obs);
    
     // priors
-    a0 ~ normal(0,1);
-    a1 ~ uniform(0,1);
+    b0 ~ normal(0,1);
+    phi ~ beta(1,1);
     sigma_proc ~ normal(0,1) T[0,];
     sigma_obs ~ normal(mu_obs, mu_obs/2) T[0,];
   }
@@ -56,11 +73,11 @@ cat("
   generated quantities {
     vector [N] R_hat;   // estimated underlying state
     vector [N] R_tilde; // estimated log ER obs
-    R_hat[1] = exp(logR[1]);
+    R_hat[1] = logR[1];
     R_tilde[1] = logR[1];
     for(i in 2:N){
-      R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
-      R_tilde[i] = normal_rng(log(R_hat[i]), sigma_obs);  
+      R_hat[i] = normal_rng(b0 + phi * R_hat[i-1], sigma_proc);
+      R_tilde[i] = normal_rng(R_hat[i], sigma_obs);  
     }
   }", fill = T)
 
@@ -70,67 +87,68 @@ sink()
 
 ### Simulated Data
 
-```{r}
-a0 = 1    # intercept
-a1 = 0.8  # ar1 coefficient
-sigma_proc = 0.2
-sigma_obs = 0.1
+Simulate data with an expected value of ER = 5,
 
-mu <- numeric(100)  # ER state variable
-mu[1] <- 5
+$log(ER) = log(5) = \frac{\beta_0}{1-\phi}$
+
+set $\beta_0 = 1$
+
+$log(5) = \frac{1}{1-\phi}$
+
+$\phi = 0.38$
+
+```{r}
+b0 = 1      # intercept
+phi = 0.38  # ar1 coefficient
+sigma_proc = 0.1 # ~10% error
+sigma_obs = 0.05  
+
+logR <- numeric(100)  # ER state variable
+logR[1] <- log(5)
 
 # Observed ER, on a log scale
-R = log(mu[1]) + rnorm(1, 0, sigma_obs)
+logR_obs = rnorm(1, logR[1], sigma_obs)
 for (i in 2:100){
-  mu[i] <- a0 + a1 * mu[i-1] + rnorm(1, 0, sigma_proc)
-  R[i] = log(mu[i]) + rnorm(1, 0, 0.2)
+  logR[i] <- b0 + phi * logR[i-1] + rnorm(1, 0, sigma_proc)
+  logR_obs[i] = rnorm(1, logR[i], sigma_obs)
 }
 
 # compare state variable and observations
 par(mfrow = c(1,2))
 
-plot(mu, type = 'l')
-points(exp(R))
+plot(exp(logR), type = 'l', ylab = 'ER', xlab = 'days')
+points(exp(logR_obs))
 
 # does variance scale with ER?
-plot(mu, abs(exp(R) - mu), xlab = 'ER', ylab = 'obs error')
+plot(exp(logR), abs(exp(logR_obs) - logR), xlab = 'ER', ylab = 'obs error')
 
 ```
 
 ### Run Model
 
-```{r}
-sim_dat <- list(logR = R, N = length(R), mu_obs = sigma_obs)
-fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
+```{r, eval = F}
+sim_dat <- list(logR_obs = logR_obs, N = length(logR_obs), mu_obs = sigma_obs)
+fit <- stan(file = 'src/SAM/stan/ar1_model.stan', 
+            data = sim_dat,
             warmup = 500, iter = 1000, 
             chains = 4, cores = 4)
 
 ```
 
-
-
-The error suggests running with only one chain to debug. Doing that gives the following errors:
-
+### Parameter recovery
 ```{r}
-fit <- stan(file = 'src/SAM/stan/ar1_model.stan', data = sim_dat,
-            warmup = 500, iter = 1000, 
-            chains = 1, cores = 4)
+fit <- readRDS('C:/Users/Alice Carter/git/autotrophic_rivers/src/ar1/log_ar1_sim_fit.rds')
+traceplot(fit, pars= c('b0', 'phi', 'sigma_proc', 'sigma_obs'))
+plot_post_sim(fit, 
+              pars = c('b0', 'phi', 'sigma_proc', 'sigma_obs'),
+              vals = c(b0, phi, sigma_proc, sigma_obs))
 ```
 
-It looks like there is a problem with my generated quatnities, but I am not sure why there is a problem with the way it is specified. Taking the generated quantities out of the model and rerunning it gives me this:
+Here I put a fairly strong prior on observation error,
 
-### Model without generated quantities block
+$\sigma_{obs} \sim Normal(0.05, 0.025)$
 
+but I am still getting poorly mixed chains and the observation error is highly correlated with the log posterior
 ```{r}
-fit <- stan(file = 'src/SAM/stan/ar1_model_nogq.stan', data = sim_dat,
-            warmup = 500, iter = 1000, 
-            chains = 4, cores = 4)
+pairs(fit, pars = c('b0', 'phi', 'sigma_proc', 'sigma_obs', 'lp__'))
 ```
-I'm still getting a lot of warnings, and I am not doing a great job recovering my parameters (true values shown below as red triangles). Additionally, the posteriors for a0 and a1 are very highly correlated. Any advice about how I should be changing the model to incorporate log(ER) would be helpful.
-```{r}
-p <- rstan::plot(fit, show_density = T, fill_color = 'grey',
-                 pars = c('a0', 'a1', 'sigma_obs', 'sigma_proc'))
-dd <- data.frame(x = c(1, 0.8, 0.1, 0.2), y = c(4,3,2,1))
-p + geom_point(data = dd, aes(x = x, y = y), size = 3, shape = 17, col = 'brown3')
-
-pairs(fit, pars = c('a0', 'a1', 'sigma_obs', 'sigma_proc'))
