@@ -71,12 +71,12 @@ w <- which(!is.na(snake$Discharge_m3s))
 snake <- snake[min(w):max(w), ]
 
 #Convert datetime to solar time 
-snake$DateTime_PST <- with_tz(snake$datetime_UTC, tz="PST") # convert to PST timezone
-snake$solar.time <- calc_solar_time(snake$DateTime_PST, longitude=lon)
+snake$DateTime_MST <- with_tz(snake$datetime_UTC, tz="MST") # convert to PST timezone
+snake$solar.time <- calc_solar_time(snake$DateTime_MST, longitude=lon)
 snake$light <- calc_light(snake$solar.time, latitude=lat,longitude=lon)
   
 snake <- snake %>%
-    select(-DateTime_PST, -Light_PAR) %>%
+    select(-DateTime_MST, -Light_PAR) %>%
     rename(DO.obs = DO_mgL, 
            DO.sat = satDO_mgL,
            temp.water = WaterTemp_C,

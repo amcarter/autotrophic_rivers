@@ -120,7 +120,7 @@ plot(exp(logR), type = 'l', ylab = 'ER', xlab = 'days')
 points(exp(logR_obs))
 
 # does variance scale with ER?
-plot(exp(logR), abs(exp(logR_obs) - logR), xlab = 'ER', ylab = 'obs error')
+plot(exp(logR), abs(exp(logR_obs) - exp(logR)), xlab = 'ER', ylab = 'obs error')
 
 ```
 

@@ -13,7 +13,9 @@ library(dygraphs)
 setwd("C:/Users/Alice Carter/git/autotrophic_rivers/")
 
 ## Read in Data ####
-dat <- read_csv("data/raw_snake.csv") %>%
+dat <- read_csv("data/raw_snake.csv") 
+sitecode <- paste0('nwis_', substr(dat$sitecode[1], 6, 13))
+dat <- dat %>%
   select(-regionID, -sitecode, -datetime_UTC)
 
 
@@ -82,5 +84,79 @@ bayes_specs$K600_lnQ_nodes_centers <- nodes
   # 
 
 # Model Run ####
-fit <- metab(bayes_specs, dat)
-saveRDS(fit, "data/fit_snake.rds")
+# fit <- metab(bayes_specs, dat)
+# saveRDS(fit, "data/fit_snake.rds")
+fit <- readRDS("data/fit_snake.rds")
+ff <- streamMetabolizer::get_fit(fit)
+ff$warnings
+ff$errors
+ff$daily %>%
+  select(date, ends_with('daily_Rhat')) %>%
+  pivot_longer(cols = ends_with('hat'), names_to = 'var', values_to = 'rhat') %>%
+  ggplot(aes(x = rhat, y = var)) + 
+  geom_boxplot()
+# The Rhats all look fine.
+
+met <- ff$daily %>%
+  select(date, GPP = GPP_mean, GPP_sd, GPP_2.5pct, GPP_97.5pct, 
+         GPP_n_eff, GPP_Rhat, ER = ER_mean, ER_sd, ER_2.5pct, ER_97.5pct,
+         ER_n_eff, ER_Rhat, K600 = K600_daily_mean, K600_sd = K600_daily_sd,
+         K600_2.5pct = K600_daily_2.5pct, K600_97.5pct = K600_daily_97.5pct,
+         K600_n_eff = K600_daily_n_eff, K600_Rhat = K600_daily_Rhat, warnings,
+         errors)
+
+# Compare new metab estimates to the powell center estimates ####
+pw_metab <- read_csv('../loticlentic_synthesis/data/powell_data_import/compiled_daily_model_results.csv') %>%
+  filter(site_name == sitecode) 
+  
+pw_metab <- pw_metab %>%
+  rename(GPP_pw = GPP, ER_pw = ER, K600_pw = K600)
+
+comp <- left_join(met, pw_metab, by = 'date') %>%
+  mutate(GPP.Rhat = case_when(GPP.Rhat < 1.05 ~ 0,
+                              GPP.Rhat >= 1.05 ~ 1,
+                              TRUE ~ NA_real_),
+         ER.Rhat = case_when(ER.Rhat < 1.05 ~ 0,
+                              ER.Rhat >= 1.05 ~ 1,
+                              TRUE ~ NA_real_))
+jpeg(filename = 'figures/snake_met_fit_comparison.jpeg', width = 7, height = 7,
+     res = 300, units = 'in')
+  ggplot(comp, aes(date, GPP)) +
+    geom_line(col = 'forestgreen') +
+    geom_line(aes(y = ER), col = 'black') +
+    geom_point(aes(y = GPP_pw, col = GPP.Rhat)) +
+    geom_point(aes(y = ER_pw, col = ER.Rhat))
+dev.off()
+
+ggplot(comp, aes(GPP, GPP_pw, col = GPP.Rhat)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1)
+ggplot(comp, aes(ER, ER_pw, col = ER.Rhat)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1)
+
+# The new metab estimates have considerably better Rhats, but they do not 
+# otherwise differ significantly from the powell center estimates
+
+ggplot(comp, aes(log(discharge), (K600))) +
+  geom_point() +
+  geom_point(aes(y = (K600_pw)), col = 'steelblue')
+
+jpeg(filename = 'figures/snake_K600_fit_comparison.jpeg', width = 5, height = 5,
+     res = 300, units = 'in')
+  par(mfrow = c(2,2), mar = c(4,4,1,0), oma = c(0,0,0,1))
+  plot(comp$K600, comp$ER, main = 'new estimates', xlab = 'K600', ylab = 'ER', 
+       xlim = c(0.35, 1.25), ylim = c(-35, 0))
+  plot(comp$K600_pw, comp$ER_pw, main = 'powell estimates', xlab = 'K600',
+       ylab = '', xlim = c(0.35, 1.25), ylim = c(-35, 0))
+  plot(comp$discharge, comp$K600, log = 'xy', ylim = c(0.35, 1.25), ylab = 'K600',
+       xlab = 'discharge')
+  plot(comp$discharge, comp$K600_pw, log = 'xy', xlab = 'discharge', ylab = '', 
+       ylim = c(0.35, 1.25))
+dev.off()
+
+met <- pw_metab %>% 
+  select(-starts_with(c('GPP', 'ER', 'K600')), -resolution) %>%
+  right_join(met, by = 'date')
+  
+write_csv(met, 'data/met_snake.csv')
