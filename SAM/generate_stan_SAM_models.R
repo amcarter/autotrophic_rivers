@@ -5,8 +5,9 @@ setwd("C:/Users/Alice Carter/git/autotrophic_rivers")
 source('src/stan_helpers.R')
 library(rstan)
 library(shinystan)
+library(tidyverse)
 options(mc.cores = parallel::detectCores())
-rstan_options(auto_write = TURE)
+rstan_options(auto_write = TRUE)
 #
 # Basic SAM code ####
 # ER as a function of GPP on days t-4:t
@@ -106,7 +107,7 @@ fit_fake <- stan(file = 'src/SAM/stan/SAM.stan',
                  warmup = 500, iter = 1000, 
                  chains = 4, cores = 4)
 print(fit_fake, pars=c("a0", "a1", "w", 'sigma'))
-plot(fit_fake, pars = c("a0", "a1", "w", 'sigma'))
+plot_post_sim(fit_fake, pars = c("a0", "a1", "w", 'sigma'))
 # launch_shinystan(fit_fake)
 saveRDS(list(fit = fit_fake, dat = sim_dat), 'src/SAM/stan/fits/fit_fake.rds')
 
@@ -126,6 +127,157 @@ par(mfrow = c(1,2))
 acf(R, main = 'Autocorrelation of ER')
 acf(R - R_hat, main = 'Autocorrelation of ER residuals')
 
+
+# SAM code V2 ####
+# ER = a 0 + AR_f * P_t + a1 * P_ant + a2 * error_t
+
+sink("src/SAM/stan/SAM_v2.stan")
+
+cat("
+    data {
+      int <lower = 0> N;
+      vector [N] P;
+      vector [N] R;
+      vector [N] temp;
+      int <lower = 0> nweight;
+      vector [nweight] alpha;
+    }
+    
+    parameters {
+      real a0;  // intercept
+      real <lower=0, upper=1> ARf; // autotrophic resp fraction
+      real <lower=0> a1;
+      real <lower=0> a2;
+      real <lower=0> Ea;
+      simplex [nweight] w; 
+      real <lower=0> sigma;
+    }
+    
+    transformed parameters{
+      vector [N] Pant;
+      vector [N] temp_K;
+      temp_K = (temp + 273.15)/100;
+      Pant[1:nweight] = P[1:nweight];
+
+      for (i in (nweight + 1):N){
+        vector  [nweight] Pvec;
+        for(j in 1:nweight){ 
+          Pvec[j]=w[j]*P[i-j];
+        }
+        Pant[i]=sum(Pvec);
+      }
+    }
+    
+    model {
+      for (i in (nweight+1):N){
+        R[i] ~ normal(a0 + ARf*P[i] + a1*Pant[i] + a2*exp(-Ea/temp_K[i]), sigma); // likelihood
+      }
+      
+    //priors
+    a0 ~ normal(0,5); 
+    a1 ~ normal(0,1);
+    a2 ~ normal(0,1);
+    Ea ~ normal(0,1);
+    ARf ~ beta(10.4, 13.2); //mean = 0.44, sd = 0.1
+    w ~ dirichlet(alpha);
+    sigma ~ normal(0,1) T[0,];
+    }
+    
+    generated quantities{
+    
+      
+    }" ,fill=TRUE)
+
+sink()
+
+# Fake Data: 
+# set parameters
+a0 = 0
+ARf = 0.44
+a1 = 0.25
+a2 = 5
+Ea = 2.5
+nweight = 4
+w <- c(0,1,0,0)
+sigma = 0.2
+
+# generate data
+P <- numeric(100)
+R <- numeric(100)
+temp <- seq(from = 10, to = 20, length = 100)
+temp_K = (temp + 273.15)/100
+P[1] <- 10
+for (i in 2:100)
+  P[i] <- 1+0.9* P[i-1]+rnorm(1,0,0.85)
+
+Pant <- numeric(100)
+Pant[1:nweight]<-P[1:nweight]
+
+for (i in (nweight+1):100){
+  Pvec<-numeric(nweight)
+  for(j in 1:nweight){
+    Pvec[j]<-w[j]*P[i-j]
+  }
+  Pant[i]<-sum(Pvec)
+}
+
+AR <- ARf * P
+HR_auto <- a1*Pant
+HR_allo <- a2*exp(-Ea/temp_K)
+for (i in 1:100){
+  R[i] <- a0 + ARf * P[i] + a1*Pant[i] + HR_allo[i] + rnorm(1, 0, sigma)
+}
+
+plot(temp, HR_allo)
+plot(AR, ylim = c(0,10))
+lines(HR_auto)
+lines(HR_allo, lty = 2)
+plot(P,R, cex = temp/10)
+plot(P/mean(P), type = 'l')
+lines(R/mean(R), lty = 2)
+
+# priors for betadistribution:
+est_beta_params(0.44, 0.1)
+
+## Run SAM model
+sim_dat <- list(R = R, P = P, temp = temp, N = length(P), 
+                nweight = nweight, alpha = rep(1, nweight))
+fit_fake <- stan(file = 'src/SAM/stan/SAM_v2.stan', 
+                 data = sim_dat, 
+                 warmup = 500, iter = 1000, 
+                 chains = 4, cores = 4)
+print(fit_fake, pars=c("a0", "ARf", "a1", "w", 'sigma'))
+plot_post_sim(fit_fake, pars = c("a0", "ARf", "a1", "a2", "Ea", 'sigma'),
+              vals = c(a0, ARf, a1, a2, Ea, sigma))
+pairs(fit_fake, pars = c('a0','ARf','a1', 'a2', 'Ea', 'sigma'))
+saveRDS(list(fit = fit_fake, dat = sim_dat), 'src/SAM/stan/fits/fit_fake_v2.rds')
+
+ccf( P,R)
+
+east <- read_csv('data/east_metab.csv')
+edat <- list(R = -east$ER, P = east$GPP, temp = zoo::na.approx(east$temp.water), 
+             N = length(east$GPP), nweight = 4, alpha = rep(1, 4))
+fit_east <- stan(file = 'src/SAM/stan/SAM_v2.stan', 
+                 data = edat, 
+                 warmup = 500, iter = 1000, 
+                 chains = 4, cores = 4)
+print(fit_east)
+plot_post_sim(fit_east, pars = c('a0', 'ARf', 'a1', 'a2', 'Ea', 'sigma'),
+              vals = c(a0, ARf, a1, a2, Ea, sigma))
+pairs(fit_east, pars = c('a0','ARf','a1', 'a2', 'Ea', 'sigma'))
+
+#snake
+snake <- read_csv('data/met_snake.csv')
+sdat <- list(R = -zoo::na.approx(snake$ER), P = zoo::na.approx(snake$GPP),
+             temp = zoo::na.approx(snake$temp.water), 
+             N = length(snake$GPP), nweight = 4, alpha = rep(1, 4))
+fit_snake <- stan(file = 'src/SAM/stan/SAM_v2.stan', 
+                 data = edat, 
+                 warmup = 500, iter = 1000, 
+                 chains = 4, cores = 4)
+print(fit_snake)
+plot(fit_snake)
+pairs(fit_snake, pars = c('a0','ARf','a1', 'a2', 'sigma'))
 
 
 # Basic autoregressive model ####

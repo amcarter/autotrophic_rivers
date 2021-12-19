@@ -12,3 +12,10 @@ plot_post_sim <- function(fit, pars, vals){
   return(p)
 }
 
+# distributions ####
+est_beta_params <- function(mu, sigma) {
+  alpha <- ((1 - mu) / sigma^2 - 1 / mu) * mu ^ 2
+  beta <- alpha * (1 / mu - 1)
+  return(params = list(alpha = alpha, beta = beta))
+}
+
