@@ -1,0 +1,350 @@
+---
+title: "Ecological Memory in Stream Respiration"
+author: "Alice Carter"
+date: "Sys.date()"
+output: html_document
+editor_options: 
+chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
+setwd('C:/Users/Alice Carter/git/autotrophic_rivers/')
+library(rstan)
+library(tidyverse)
+```
+
+### Background
+The breakdown of organic carbon is a fundamental energetic process in rivers. It is important and relevant becasuse...
+
+Some of the carbon that is respired comes from terrestrial subsidies, but in some rivers, autotrophy can play a dominant role in supplying foodchains and energetic cycles, etc (Marcarelli2011, Minshall1987).
+
+Previous studies have estimated that about half of the carbon fixed by autotrophs is respired rapidly either by the autotrophic organisms themselves or by closely associated heterotrophs (Hall and Beaulieu 2013) but those estimates range widely across rivers (Genzoli and Hall 2016, others). However, we do not know when that respiration is happening. Is it occuring within the same day that the carbon is fixed or several days later?
+
+Questions:  
+1. How much of GPP is respired in streams vs being stored or exported?  
+2. When is autochthonous material respired relative to when it is fixed?  
+3. Does incorporating ecological memory into our understanding of how GPP influences ER change our estimate of autotrophic respiration?  
+4. What characteristics of streams determine the degree to which there is ecological memory in stream respiration?  
+5. In systems where we do observe memory of past GPP in ER fluxes, is there a seasonality to these dynamics? Does higher GPP lead to stronger ecological memory?  
+
+Hypotheses:  
+Rivers with higher fluxes of primary productivity will derive a greater portion of their respiration from autochthonous production, resulting in a possibility for ecological memory of productivity in respiration fluxes. Community dynamics will determine the likelihood of a time lag with phytoplankton dominated communities deriving most of their respiration from that days productivity and benthic, macrophyte dominated comunities demonstrating time lags in the response of ER to GPP.
+
+
+#### Snake River Metabolism
+![](/Users/Alice Carter/git/autotrophic_rivers/figures/snake_data.png){width=50%}
+
+### Model
+
+We used a stochastic antecedent model of the flux of ecosystem respiration on a given day $(R_t)$ as a function of productivity on that and preceding days $(P_{t-1}, ..., P_t)$. To begin, we consider respiration as a sum of carbon respired by autotrophs and their closely associated heterotrophs $(AR_t)$ as well as respiration of stored carbon (either biomass or detrital) by heterotrophs $(HR_t)$: 
+
+\[R_t = AR_t + HR_t\]
+\[AR_t = AR_f \cdot P_t\]
+\[HR_t = HR_{auto} + HR_{det}\]
+
+Where autotrophic respiration is defined as some fraction $(AR_f)$ of that day's primary productivity (Hall and Beaulieu 2013) and heterotrophic respiration is broken down into the components that are derived from stored autotrophic carbon $(HR_{auto})$ vs allochthonous detrital carbon $(HR_{det})$. In our model, we are interested in understanding the time lags associated with $HR_{auto}$ so we model it as a linear function of antecedent fluxes of productivity $(P_{ant})$:
+
+\[HR_{auto} = \alpha_1 \cdot P_{ant}\]
+\[P_{ant} = \sum_{j=1}^{N} P_{t - j} \cdot w_j\] 
+\[0 \leq w_j \leq 1, \sum_{j=1}^N w_j = 1\]
+
+where $(P_{ant})$ is calculated as the sum of the preceding N days of productivity weighted by the simplex vector w. Respiration of detrital organic matter is assumed to be independent of productivity and dependent instead on organic matter and nutrient availability, water residence time, disturbance regime, and temperature among other controls. Because this component is not the focus of our study and data are typically limited on these controls, we chose to model $HR_{det}$ as an exponential function of temperature with a seasonally varying coefficient $(\alpha_2)$ to account for variable organic matter and nutrient availability.  It may make sense at some point to add a term including discharge (to represent residence time and disturbance).   
+
+\[HR_{det} = \alpha_2 \cdot e^{E_a/kT}\]
+
+where $E_a$ is the activation energy for heterotrophic respiration (measured to be 0.58 (0.44 - 0.78) by Yvon Durocher et al. 2012), $k$ is the Boltzman constant $(8.62 * 10^{-5} eV K^{-1})$ and $T$ is the temperature in $K$. Thus, we model respiration as:  
+
+\[R_t = AR_f \cdot P_t + \alpha_1 \cdot P_{ant} + \alpha_2 \cdot e^{E_a/kT} + \epsilon_t\]
+
+Where $\epsilon_t \sim N(0, \sigma)$ accounts for both the error in observation of the true value of respiration and error in the model's representation of $R_t$. 
+
+Priors are minimally informative, but a special prior on $w$, which is a simplex 
+
+$$w \sim dirichlet(1,1,...1)$$
+
+### Stan Code
+
+```{r, echo = FALSE} 
+read_lines("src/SAM/stan/SAM_v2.stan")
+```
+
+### Simulate Data: Assign weight with 50% each on lags day 1 and 2
+
+```{r} 
+# set parameters
+ARf = 0.44
+a1 = 0.25
+a2 = 5
+nweight = 4
+w <- c(0,1,0,0)
+sigma = 0.2
+
+# generate data
+P <- numeric(100)
+R <- numeric(100)
+temp <- seq(from = 10, to = 20, length = 100)
+P[1] <- 10
+for (i in 2:100)
+  P[i] <- 1+0.9* P[i-1]+rnorm(1,0,0.85)
+
+Pant <- numeric(100)
+Pant[1:nweight]<-P[1:nweight]
+
+for (i in (nweight+1):100){
+  Pvec<-numeric(nweight)
+  for(j in 1:nweight){
+    Pvec[j]<-w[j]*P[i-j]
+  }
+  Pant[i]<-sum(Pvec)
+}
+
+AR <- ARf * P
+HR_auto <- a1*Pant
+HR_allo <- a2*exp(-1/temp)
+for (i in 1:100){
+  R[i] <- ARf * P[i] + a1*Pant[i] + HR_allo[i] + rnorm(1, 0, sigma)
+}
+```
+
+### Parameter recovery:
+```{r, eval = FALSE}
+fit_fake <- readRDS('src/SAM/stan/fits/fit_fake_samv2.rds')
+
+print(fit_fake$fit, pars=c("ARf", "a1", "a2", 'sigma'))
+plot_post_sim(fit_fake, pars = c( "ARf", "a1", "a2", 'sigma'),
+              vals = c( ARf, a1, a2, sigma))
+pairs(fit_fake, pars = c('ARf','a1', 'a2', 'sigma'))
+```
+
+### Test model performance on real data
+To see how well we are capturing the dynamics of a real system, we test the basic SAM model on real data from east canyon creek.
+
+
+```{r, eval = FALSE}
+east <- read_csv('data/east_metab.csv')
+fit <- readRDS('src/SAM/stan/fits/east_sam_fit.rds')
+R_hat <- summary(fit, pars = 'R_hat')$summary %>%
+  as_tibble() %>%
+  pull(mean)
+
+# Do predictions correlate with data?
+plot(-east$ER, R_hat, xlab = 'measured ER', ylab = 'predicted ER',
+     main = 'SAM model predictions')
+abline(0,1)
+
+
+```
+
+The predictions correlate reasonably well with the data, but we have not sufficiently captured the autocorrelation in respiration with this model.
+
+```{r, eval = FALSE}
+# are we accounting for all of the autocorrelation in the respiration?
+par(mfrow = c(1,2))
+acf(-east$ER, main = 'Autocorrelation of ER')
+acf(-east$ER - R_hat, main = 'Autocorrelation of ER residuals')
+
+# No and it looks like the pattern in the ER residuals might be seasonal
+par(mfrow = c(1,1))
+plot(east$Date, -east$ER-R_hat, xlab = 'date', ylab = 'ER residuals')
+
+```
+
+The residuals suggest the model is underestimating the impact of GPP on ER in the spring and overestimating it in the fall. This makes ecological sense and is a good argument for running this model seasonally 
+
+
+### Simple autoregressive model
+
+Next, to compare to the results of the SAM model, I built a state space ar1 model of respiration.
+
+Stan code:
+```{r, eval = F}
+
+sink('src/SAM/stan/ar1_model.stan')
+cat("
+  data {
+   int <lower = 0> N; // Sample size
+   vector[N] R;
+  }
+  
+  parameters {
+   real a0; // Intercept
+   real <lower = 0, upper = 1> a1; 
+   real <lower = 0> sigma_proc;
+   real <lower = 0> sigma_obs;
+   vector [N] mu;
+  }
+  
+  model {
+   mu[1] ~ normal(R[1], 0.01);
+   mu[2:N] ~ normal(a0 + a1 * mu[1:(N-1)], sigma_proc);
+   R ~ normal(mu, sigma_obs);
+   
+   
+   a0 ~ normal(0,1);
+   a1 ~ uniform(0,1);
+   sigma_proc ~ normal(0,1) T[0,];
+   sigma_obs ~ normal(0,1) T[0,];
+  }
+  
+  generated quantities {
+    vector [N] R_hat;
+    vector [N] R_tilde;
+    R_hat[1] = R[1];
+    R_tilde[1] = R[1];
+    for(i in 2:N){
+        R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1], sigma_proc);
+        R_tilde[i] = normal_rng(R_hat[i], sigma_obs);  
+    }
+  }", fill = T)
+
+
+sink()
+```
+
+For this model, I am struggling to recover the parameters as well as for the SAM model. Using simulated data of a mean reverting random walk with 0.5 process error and o.2 observation error:
+
+```{r, eval = FALSE}
+a0 = 1 # intercept
+a1 = 0.8 # ar1 coefficient
+sigma_proc = 0.5
+sigma_obs = 0.2
+
+mu <- numeric(100)
+mu[1] <- 5
+R = mu[1] + rnorm(1, 0, sigma_obs)
+for (i in 2:100){
+  mu[i] <- a0 + a1 * mu[i-1] + rnorm(1, 0, sigma_proc)
+  R[i] = mu[i] + rnorm(1, 0, 0.2)
+}
+
+fit <- readRDS('src/SAM/stan/fits/simulated_ar1_fit.rds')
+plot(fit$fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))
+
+```
+
+This model tends to overestimate the intercept and have a large uncertainty surrounding that estimate. It also gives the following warnings from fitting:
+- divergent transitions
+- low bayesian fraction of missing information
+- largest Rhat is NA
+- low bulk effective sample size
+- low tail effective sample size
+
+I am not sure how concerned I should be about these warnings, or if this recovery of parameters from simulated data is sufficient. It would be great to discuss.
+
+```{r, eval = FALSE}
+R_hat <- summary(fit$fit, pars = 'R_hat')$summary %>%
+  as_tibble() %>%
+  pull(mean)
+pp <- summary(fit$fit, pars = c('a0', 'a1', 'sigma_proc', 'sigma_obs'))$summary %>%
+  as_tibble() %>%
+  pull(mean)
+
+mu <- numeric(100)
+mu[1] <- 5
+R_hat = mu[1] + rnorm(1, 0, pp[4])
+for (i in 2:100){
+  mu[i] <- pp[1] + pp[2] * mu[i-1] + rnorm(1, 0, pp[3])
+  R_hat[i] = mu[i] + rnorm(1, 0, pp[4])
+}
+R <- fit$dat$R
+plot(R, R_hat)
+abline(0,1)
+
+par(mfrow = c(1,2))
+acf(R, main = 'Autocorrelation of ER')
+acf(R - R_hat, main = 'Autocorrelation of ER residuals')
+
+```
+
+In this case, the autocorrelation of the residuals is not accounted for in the model, but I don't think it should be in a simple random walk model. Even in the parameters were recovered perfectly the autocorrelation of the estimates will be different than in the original data and will therefore still be present in the residuals. Next, I attempted to merge these two models and build a state space, ar1 model with GPP as an antecedent predictor. Below, I compare the results of running the East Canyon creek data in the basic SAM model, the ar1 model, and the combined model to see if we do any better at estimating ER.
+
+### Model Comparison with real data
+
+Stan code for combined SAM and ar1 model
+```{r, eval = FALSE}
+
+sink("src/SAM/stan/SAM_ar1.stan")
+
+cat("
+
+data {
+ int <lower = 0> N;
+ vector[N] R;
+ vector [N] P;
+ int <lower = 0> nweight;
+ vector [nweight] alpha;
+}
+
+parameters {
+ real a0; // Intercept
+ real < lower = 0, upper = 1> a1; 
+ real <lower =0> a2;
+ real < lower = 0 > sigma_obs;
+ real < lower = 0 > sigma_proc;
+ simplex [nweight] w; 
+ vector [N] mu;
+}
+
+transformed parameters{
+ vector  [N] Pant;
+ Pant[1:5] = P[1:5];
+
+ for (i in 6:N){
+   vector  [nweight] Pvec;
+   for(j in 1:nweight){ 
+     Pvec[j]=w[j]*P[i-(j-1)];
+   }
+   Pant[i]=sum(Pvec);
+ }
+}
+
+model {
+ mu[1:5] ~ normal(R[1:5], 0.01);
+ for (i in 6:N){
+  mu[i] ~ normal(a0 + a1 * mu[i-1] + a2*Pant[i], sigma_proc);
+  R[i] ~ normal(mu[i], sigma_obs);
+ }
+
+ a0 ~ normal(0,5); //priors
+ a1 ~ uniform(0,1);
+ a2 ~ normal(0,1) T[0,];
+ w ~ dirichlet(alpha);
+ sigma_obs ~ normal(0,1) T[0,];
+ sigma_proc ~ normal(0,1) T[0,];
+}
+
+generated quantities {
+  vector [N] R_hat;
+  R_hat[1:5] = R[1:5];
+  for(i in 6:N){
+    R_hat[i] = normal_rng(a0 + a1 * R_hat[i-1] + a2*Pant[i], sigma_proc);
+  }
+  
+}", fill = T)
+sink()
+
+```
+
+In the simulated data for this model, I set the parameters as follows:
+
+$a_0 = 0$, intercept
+
+$a_1 = 0.7$, autoregressive coefficient
+
+$a_2 = 0.3$, antecedent model coefficient
+
+$w <- c(0.5,0.5,0,0,0)$, weights on previous days
+
+$\sigma_{proc} = 0.5$
+
+$\sigma_{obs} = 0.2$
+
+Again, I was able to recover the parameters, but with considerable uncertainty in the value of the intercept and in the weights on prior values of GPP.
+
+
+## Next:
+1. Refine combined model
+2. Model comparison
+3. Constrain observation error

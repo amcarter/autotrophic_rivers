@@ -129,7 +129,7 @@ acf(R - R_hat, main = 'Autocorrelation of ER residuals')
 
 
 # SAM code V2 ####
-# ER = a 0 + AR_f * P_t + a1 * P_ant + a2 * error_t
+# ER = AR_f * P_t + a1 * P_ant + a2 * f(Q, T) + error_t
 
 sink("src/SAM/stan/SAM_v2.stan")
 
@@ -144,19 +144,16 @@ cat("
     }
     
     parameters {
-      real a0;  // intercept
       real <lower=0, upper=1> ARf; // autotrophic resp fraction
       real <lower=0> a1;
       real <lower=0> a2;
-      real <lower=0> Ea;
+      //real <lower=0> Ea; excluded for now because I can't get the magnitudes right
       simplex [nweight] w; 
       real <lower=0> sigma;
     }
     
     transformed parameters{
       vector [N] Pant;
-      vector [N] temp_K;
-      temp_K = (temp + 273.15)/100;
       Pant[1:nweight] = P[1:nweight];
 
       for (i in (nweight + 1):N){
@@ -170,33 +167,32 @@ cat("
     
     model {
       for (i in (nweight+1):N){
-        R[i] ~ normal(a0 + ARf*P[i] + a1*Pant[i] + a2*exp(-Ea/temp_K[i]), sigma); // likelihood
+        R[i] ~ normal(ARf*P[i] + a1*Pant[i] + a2*exp(-1/temp[i]), sigma); // likelihood
       }
       
     //priors
-    a0 ~ normal(0,5); 
-    a1 ~ normal(0,1);
-    a2 ~ normal(0,1);
-    Ea ~ normal(0,1);
+    a1 ~ beta(1,1);
+    a2 ~ normal(0,5);
+    //Ea ~ normal(0,1);
     ARf ~ beta(10.4, 13.2); //mean = 0.44, sd = 0.1
     w ~ dirichlet(alpha);
     sigma ~ normal(0,1) T[0,];
     }
     
     generated quantities{
+    }
     
-      
-    }" ,fill=TRUE)
+    " ,fill=TRUE)
 
 sink()
 
 # Fake Data: 
 # set parameters
-a0 = 0
+
 ARf = 0.44
 a1 = 0.25
 a2 = 5
-Ea = 2.5
+# Ea = 0.58
 nweight = 4
 w <- c(0,1,0,0)
 sigma = 0.2
@@ -223,12 +219,12 @@ for (i in (nweight+1):100){
 
 AR <- ARf * P
 HR_auto <- a1*Pant
-HR_allo <- a2*exp(-Ea/temp_K)
+HR_allo <- a2*exp(-1/temp)
 for (i in 1:100){
-  R[i] <- a0 + ARf * P[i] + a1*Pant[i] + HR_allo[i] + rnorm(1, 0, sigma)
+  R[i] <- ARf * P[i] + a1*Pant[i] + HR_allo[i] + rnorm(1, 0, sigma)
 }
 
-plot(temp, HR_allo)
+plot(HR_allo)
 plot(AR, ylim = c(0,10))
 lines(HR_auto)
 lines(HR_allo, lty = 2)
@@ -246,13 +242,13 @@ fit_fake <- stan(file = 'src/SAM/stan/SAM_v2.stan',
                  data = sim_dat, 
                  warmup = 500, iter = 1000, 
                  chains = 4, cores = 4)
-print(fit_fake, pars=c("a0", "ARf", "a1", "w", 'sigma'))
-plot_post_sim(fit_fake, pars = c("a0", "ARf", "a1", "a2", "Ea", 'sigma'),
-              vals = c(a0, ARf, a1, a2, Ea, sigma))
-pairs(fit_fake, pars = c('a0','ARf','a1', 'a2', 'Ea', 'sigma'))
-saveRDS(list(fit = fit_fake, dat = sim_dat), 'src/SAM/stan/fits/fit_fake_v2.rds')
+print(fit_fake, pars=c("ARf", "a1", "a2", "w", 'sigma'))
+plot_post_sim(fit_fake, pars = c( "ARf", "a1", "a2", 'sigma'),
+              vals = c( ARf, a1, a2, sigma))
+pairs(fit_fake, pars = c('ARf','a1', 'a2', 'sigma'))
+saveRDS(list(fit = fit_fake, dat = sim_dat), 'src/SAM/stan/fits/fit_fake_samv2.rds')
 
-ccf( P,R)
+pacf(R)
 
 east <- read_csv('data/east_metab.csv')
 edat <- list(R = -east$ER, P = east$GPP, temp = zoo::na.approx(east$temp.water), 
@@ -262,9 +258,7 @@ fit_east <- stan(file = 'src/SAM/stan/SAM_v2.stan',
                  warmup = 500, iter = 1000, 
                  chains = 4, cores = 4)
 print(fit_east)
-plot_post_sim(fit_east, pars = c('a0', 'ARf', 'a1', 'a2', 'Ea', 'sigma'),
-              vals = c(a0, ARf, a1, a2, Ea, sigma))
-pairs(fit_east, pars = c('a0','ARf','a1', 'a2', 'Ea', 'sigma'))
+pairs(fit_east, pars = c('ARf','a1', 'a2', 'sigma'))
 
 #snake
 snake <- read_csv('data/met_snake.csv')
