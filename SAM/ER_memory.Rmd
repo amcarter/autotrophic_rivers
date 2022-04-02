@@ -1,7 +1,7 @@
 ---
 title: "Ecological Memory in Stream Respiration"
 author: "Alice Carter"
-date: "Sys.date()"
+date: Sys.date()
 output: html_document
 editor_options: 
 chunk_output_type: console
@@ -11,6 +11,7 @@ chunk_output_type: console
 knitr::opts_knit$set(root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
 setwd('C:/Users/Alice Carter/git/autotrophic_rivers/')
+source('src/stan_helpers.R')
 library(rstan)
 library(tidyverse)
 ```
@@ -68,6 +69,7 @@ $$w \sim dirichlet(1,1,...1)$$
 
 ```{r, echo = FALSE} 
 read_lines("src/SAM/stan/SAM_v2.stan")
+
 ```
 
 ### Simulate Data: Assign weight with 50% each on lags day 1 and 2
@@ -109,13 +111,13 @@ for (i in 1:100){
 ```
 
 ### Parameter recovery:
-```{r, eval = FALSE}
+```{r}
 fit_fake <- readRDS('src/SAM/stan/fits/fit_fake_samv2.rds')
 
 print(fit_fake$fit, pars=c("ARf", "a1", "a2", 'sigma'))
-plot_post_sim(fit_fake, pars = c( "ARf", "a1", "a2", 'sigma'),
+plot_post_sim(fit_fake$fit, pars = c( "ARf", "a1", "a2", 'sigma'),
               vals = c( ARf, a1, a2, sigma))
-pairs(fit_fake, pars = c('ARf','a1', 'a2', 'sigma'))
+pairs(fit_fake$fit, pars = c('ARf','a1', 'a2', 'sigma'))
 ```
 
 ### Test model performance on real data

@@ -61,8 +61,9 @@ cat("
       for(i in 6:N){
         R_hat[i] = normal_rng(a0 + a1 * Pant[i], sigma);
       }
+    }
       
-    }" ,fill=TRUE)
+    " ,fill=TRUE)
 
 sink()
 
