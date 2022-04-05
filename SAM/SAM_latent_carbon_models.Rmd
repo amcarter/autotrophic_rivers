@@ -8,7 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_knit$set(root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
-setwd('C:/Users/Alice Carter/git/autotrophic_rivers/')
+setwd('C:/Users/Alice Carter/git/autotrophic_rivers')
 library(tidyverse)
 library(rstan)
 source('src/stan_helpers.R')
@@ -128,7 +128,7 @@ K20 = .01      # Heterotrophic respiration at 20 C
 beta_s = 0.8   # Percent removal of organic carbon from max storm
 tau0 = quantile(ss$tau_mgm2, .75)
 beta_p = .5
-w = rep(1/N, N)
+w = rep(1/nweight, nweight)
 sigma_proc = .01 # lognormally distributed, so this is a % error
 sigma_obs = 0.08 
 
@@ -176,38 +176,42 @@ pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
   ggplot(aes(date, value, col = var)) +
   geom_line()+
   facet_wrap(.~var, scales = 'free_y', ncol = 2)
+S <- ss
 
-
-# Run Stan model ####
 ```
-
-
 
 ### Stan Code
 
 ```{r, comment='', echo = FALSE}
-cat(read_lines('src/model/stan/ss_ER.stan'), sep = '\n')
+cat(read_lines('src/SAM/stan/SAM_detC_1.stan'), sep = '\n')
 ```
 
 ```{r, eval = FALSE}
-stan_dat <- list(N = length(R_obs), R_obs = R_obs, P_obs = P,
-                 tempK = temp, Q = Q, litter = litter, C0 = C[1])
+ss <- ss[1:30,]
+stan_dat <- list(ndays = nrow(ss), nweights = nweight, 
+                 R_obs = ss$ER_C, P = ss$GPP_C, 
+                 temp = ss$temp_C, tau = ss$tau_mgm2, litter = ss$litter)
 
-mod2 <- stan('src/model/stan/ss_ER.stan', 
-             data = stan_dat, init = 0,
-             chains = 4, cores = 4, 
-             warmup = 500, iter = 1000)
+mod <- stan('src/SAM/stan/SAM_detC_1.stan', 
+             data = stan_dat, 
+             chains = 1,  cores = 4, 
+             warmup = 200, iter = 500)
+saveRDS(mod, 'src/SAM/stan/fits/SAM_detC_1_potomac.rds')
 ```
 
+un Stan model ####
 ```{r, echo = FALSE}
-# saveRDS(mod2, 'src/model/model_runs/simulated_ss_ER.rds')
-mod2 <- readRDS('src/model/model_runs/simulated_ss_ER.rds')
-print(mod2, pars = c('beta', 'sigma_obs', 'sigma_proc'))
-traceplot(mod2, ncol = 1, pars=c('beta', 'sigma_obs', 'sigma_proc'))
-plot_post_sim(mod2, pars = c('beta', 'sigma_obs', 'sigma_proc'), 
-              vals = c(beta, sigma_obs, sigma_proc))
+mod <- readRDS('src/SAM/stan/fits/SAM_detC_1_potomac.rds')
+print(mod, pars = c('C0', 'K_20', 'beta_s', 'tau0', 'beta_p', 'w', 
+                    'sigma_obs', 'sigma_proc'))
+traceplot(mod, ncol = 1, pars=c('C0', 'K_20', 'beta_s', 'tau0', 'beta_p', 'w', 
+                    'sigma_obs', 'sigma_proc'))
+plot_post_sim(mod, pars = c('C0', 'K_20', 'beta_s', 'tau0', 'beta_p', 'w', 
+                    'sigma_obs', 'sigma_proc'), 
+              vals = c(C0, K20, beta_s, tau0, beta_p, w, sigma_obs, sigma_proc))
 ```
 
+l/model_runs/simulated_ss_ER.rds')
 
 
 ```{r}
