@@ -6,12 +6,13 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_knit$set(root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, root.dir = 'C:/Users/Alice Carter/git/autotrophic_rivers/')
-setwd('C:/Users/Alice Carter/git/autotrophic_rivers')
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = '\\\\wsl.localhost/Ubuntu/home/alice/git/autotrophic_rivers/src/')
+setwd('\\\\wsl.localhost/Ubuntu/home/alice/git/autotrophic_rivers/src/')
 library(tidyverse)
 library(rstan)
-source('src/stan_helpers.R')
+getwd()
+source('stan_helpers.R', local = knitr::knit_global())
 ```
 
 ### Stochastic antecedent model of Ecosystem Respiration with carbon modeled as a latent state.
@@ -22,14 +23,14 @@ With components based on Ogle et al 2015 and Segatto et al 2021
 Read in some data from a set of autotrophic rivers to use as drivers for simulations
 
 ```{r}
-dat <- read_csv('data/daily_sensor_and_nwis_data_auto.csv')
+dat <- read_csv('../data/daily_sensor_and_nwis_data_auto.csv')
 dd <- dat %>%
   select(sitecode, date, variable, value) %>%
   pivot_wider(names_from = variable, values_from = value)
 
 sites <- unique(dd$sitecode) 
 
-md <- read_csv('data/autotrophic_siteyears_daily_filled_data.csv')
+md <- read_csv('../data/autotrophic_siteyears_daily_filled_data.csv')
 md <- filter(md, sitecode %in% sites)
 
 dd <- select(md, sitecode, Name, date = Date, DOY, 
@@ -183,35 +184,46 @@ S <- ss
 ### Stan Code
 
 ```{r, comment='', echo = FALSE}
-cat(read_lines('src/SAM/stan/SAM_detC_1.stan'), sep = '\n')
+cat(read_lines('SAM/stan/SAM_detC_1.stan'), sep = '\n')
 ```
 
 ```{r, eval = FALSE}
 ss <- ss[1:30,]
 stan_dat <- list(ndays = nrow(ss), nweights = nweight, 
-                 R_obs = ss$ER_C, P = ss$GPP_C, 
+                 R_obs = ss$ER_C, P = ss$GPP_C, C0 = 100, 
                  temp = ss$temp_C, tau = ss$tau_mgm2, litter = ss$litter)
 
-mod <- stan('src/SAM/stan/SAM_detC_1.stan', 
+mod <- stan('SAM/stan/SAM_detC_1.stan', 
              data = stan_dat, 
-             chains = 1,  cores = 4, 
-             warmup = 200, iter = 500)
-saveRDS(mod, 'src/SAM/stan/fits/SAM_detC_1_potomac.rds')
+             chains = 4,  cores = 4, 
+             warmup = 500, iter = 1000)
+saveRDS(mod, 'SAM/stan/fits/SAM_detC_1_potomac.rds')
 ```
 
-un Stan model ####
+Run Stan model ####
 ```{r, echo = FALSE}
-mod <- readRDS('src/SAM/stan/fits/SAM_detC_1_potomac.rds')
+mod <- readRDS('SAM/stan/fits/SAM_detC_1_potomac.rds')
 print(mod, pars = c('C0', 'K_20', 'beta_s', 'tau0', 'beta_p', 'w', 
                     'sigma_obs', 'sigma_proc'))
-traceplot(mod, ncol = 1, pars=c('C0', 'K_20', 'beta_s', 'tau0', 'beta_p', 'w', 
+traceplot(mod, ncol = 2, pars=c( 'beta_s', 'tau0', 'beta_p', 'w', 
                     'sigma_obs', 'sigma_proc'))
-plot_post_sim(mod, pars = c('C0', 'K_20', 'beta_s', 'tau0', 'beta_p', 'w', 
+plot_post_sim(mod, pars = c( 'beta_s', 'tau0', 'beta_p', 'w', 
                     'sigma_obs', 'sigma_proc'), 
-              vals = c(C0, K20, beta_s, tau0, beta_p, w, sigma_obs, sigma_proc))
+              vals = c( beta_s, tau0, beta_p, w, sigma_obs, sigma_proc))
 ```
 
-l/model_runs/simulated_ss_ER.rds')
+Thoughts:
+Why does the model sample values that don't seem to match the lognormal distribution I'm giving it?
+Are beta_s and tau0 trading off in this model? Does Segatto allow them to completely be scoured?
+Why is my process error so high?
+
+Tests:
+- normal process error
+- beta_s = 1
+- break model into component parts (SAM and latent carbon)
+- Fit model to NHC and to the Klamath
+
+_ss_ER.rds')
 
 
 ```{r}

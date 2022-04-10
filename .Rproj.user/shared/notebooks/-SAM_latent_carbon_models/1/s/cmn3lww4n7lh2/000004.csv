@@ -1,0 +1,12 @@
+"0","ss %>% select(date, GPP_C, discharge, R, C, HR_p, HR_d, AR, litter )%>%
+pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+  ggplot(aes(date, value, col = var)) +
+  geom_line()+
+  facet_wrap(.~var, scales = 'free_y', ncol = 2)
+ss %>% select(date, GPP_C, discharge, R, C, HR_p, HR_d, AR, litter )%>%
+pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+  ggplot(aes(date, value, col = var)) +
+  geom_line()+
+  facet_wrap(.~var, scales = 'free_y', ncol = 2)
+"
+"0","S <- ss"
