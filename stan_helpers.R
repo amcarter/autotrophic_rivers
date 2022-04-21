@@ -3,12 +3,13 @@
 
 
 # plotting ####
-plot_post_sim <- function(fit, pars, vals){
+plot_post_sim <- function(fit, pars, vals, xlim = NULL){
   dd <- data.frame(x = vals, y = length(vals):1)
   p <- rstan::plot(fit, show_density = T, fill_color = 'grey',
-                   pars = pars) + 
-    geom_point(data = dd, aes(x = x, y = y), size = 3, 
-               shape = 17, col = 'brown3')
+                   pars = pars) +
+    geom_point(data = dd, aes(x = x, y = y), size = 3,
+               shape = 17, col = 'brown3')+
+    xlim(xlim)
   return(p)
 }
 
