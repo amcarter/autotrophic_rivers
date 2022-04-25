@@ -48,8 +48,6 @@ transformed parameters{
   for(i in 1:ndays){
       K[i] = K_20/100 * exp(-E_a/k_b * (1.0/(temp[i]+273) - 0.003412969));
   }
-
-
 }
 
 model {
@@ -74,7 +72,7 @@ model {
   R_obs ~ normal(R, sigma_obs);
 
   // Priors:
-  beta_s ~ uniform(0, 1);
+  beta_s ~ beta(3, 1.25);
   sigma_obs ~ normal(0.08, 0.02);
   sigma_proc ~ normal(0,0.1);
   K_20 ~ normal(1, 0.1);

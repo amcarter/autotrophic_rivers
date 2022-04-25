@@ -2,10 +2,10 @@
 
 library(rstan)
 library(shinystan)
-setwd("C:/Users/Alice Carter/git/autotrophic_rivers")
+setwd("C:/Users/alice.carter/git/autotrophic_rivers/")
 source('src/SAM/generate_stan_SAM_models.R')
 # Basic SAM implementation ####
-#   ER = a0 + a1*f(GPP[t-4:t]) + epsilon 
+#   ER = a0 + a1*f(GPP[t-4:t]) + epsilon
 
 # Fake Data: Assign weight with 50% each on lags day 1 and 2
 
@@ -31,7 +31,7 @@ for (i in 6:100){
     Pvec[j]<-w[j]*P[i-(j-1)]
   }
   Pant[i]<-sum(Pvec)
-  
+
 }
 
 R <- a0 + a1 * P[1]
@@ -43,9 +43,9 @@ plot(P,R)
 
 ## Run SAM model
 sim_dat <- list(R = R, P = P, N = length(P), nweight = 5, alpha = rep(1, 5))
-fit_fake <- stan(file = 'src/SAM/stan/SAM.stan', 
-                 data = sim_dat, 
-                 warmup = 500, iter = 1000, 
+fit_fake <- stan(file = 'src/SAM/stan/SAM.stan',
+                 data = sim_dat,
+                 warmup = 500, iter = 1000,
                  chains = 4, cores = 4)
 print(fit_fake, pars=c("a0", "a1", "w", 'sigma'))
 plot(fit_fake, pars = c("a0", "a1", "w", 'sigma'))
@@ -68,7 +68,7 @@ par(mfrow = c(1,2))
 acf(R, main = 'Autocorrelation of ER')
 acf(R - R_hat, main = 'Autocorrelation of ER residuals')
 
-  
+
 # SAM model for different previous intervals of GPP ####
 ## Fake Data: Assign weight with 50% each on lags day 1 and 2
 
@@ -106,9 +106,9 @@ pacf(R)
 
 ## How did we do?
 sim_dat <- list(R = R, P = P, N = length(P), nweight = 4, alpha = rep(1, 4))
-fit_fake2 <- stan(file = 'src/SAM/stan/SAM_intervals.stan', 
-                  data = sim_dat, 
-                  warmup = 500, iter = 1000, 
+fit_fake2 <- stan(file = 'src/SAM/stan/SAM_intervals.stan',
+                  data = sim_dat,
+                  warmup = 500, iter = 1000,
                   chains = 4, cores = 4)
 print(fit_fake2, pars=c("a0", "a1", "w", 'sigma'))
 plot(fit_fake2, pars = c("a0", "a1", "w", 'sigma'))
@@ -116,7 +116,7 @@ plot(fit_fake2, pars = c("a0", "a1", "w", 'sigma'))
 saveRDS(fit_fake2, 'src/SAM/stan/fits/fit_fake2.rds')
 
 ## Predict data
-p_est <- summary(fit_fake2, pars = c('a0', 'a1', 'w', 'sigma'), 
+p_est <- summary(fit_fake2, pars = c('a0', 'a1', 'w', 'sigma'),
                  probs = c(0.025, 0.975))$summary
 
 a0 <- p_est[1,1]

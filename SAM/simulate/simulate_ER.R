@@ -6,18 +6,20 @@
 
 library(tidyverse)
 library(lubridate)
-# setwd('C:/Users/alice.carter/git/except_heterotrophy/')
+setwd('C:/Users/alice.carter/git/except_heterotrophy/')
 source('R/data_simulation/simulation_functions.R')
 dat <- readRDS('data_356rivers/high_quality_daily_metabolism_with_SP_covariates.rds')
 
 # add site names and subset to autotrophic sites
 autosites <- read_csv('data_working/autotrophic_siteyears_daily.csv') %>%
     select(site_name) %>% pull() %>% unique()
-md <- read_tsv('data_356rivers/site_data.tsv') %>%
-    select(site_name, long_name)
-dat <- left_join(dat, md, by = 'site_name') %>%
-    filter(site_name %in% autosites) %>%
-    mutate(year = year(date))
+
+dat <- dat %>%
+    # filter(site_name %in% autosites) %>%
+    mutate(trophic_stat = case_when(site_name %in% autosites ~ 'auto',
+                                    TRUE ~ 'hetero'))
+
+write_csv(dat, 'C:/Users/alice.carter/git/autotrophic_rivers/data/data_working/high_quality_daily_met.csv')
 
 glimpse(dat)
 unique(dat$long_name)
@@ -87,6 +89,6 @@ dd %>% filter(year == 2013) %>%
         geom_line() +
         facet_wrap(.~variable, scale = 'free', ncol = 1)
 
-
+write_csv(dd, 'data_working/simulated_ER_nwis_01481500.csv')
 # Simulate ER function: ####
 # coming soon
