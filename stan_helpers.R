@@ -2,6 +2,46 @@
 #A Carter
 
 
+# extracting and summarizing data:
+get_pars <- function(mod, pars){
+    fit <- summary(mod)$summary
+    pp <- fit %>%
+        as.data.frame()%>%
+        filter(row.names(fit) %in% pars)
+
+    return(pp)
+
+}
+
+calc_pp_ests <- function(mod, dat, sim_func, pars,
+                         factors = NULL, return_ests = FALSE){
+    if(is.null(factors)) factors = rep(1, length(pars))
+    jd <- extract(mod, pars = pars) %>%
+        as.tibble()
+    post_preds <- matrix(NA, nrow = nrow(dat), ncol = nrow(jd))
+    for(i in 1:nrow(jd)){
+        for(j in 1:length(pars)){
+            assign(pars[j], jd[[pars[j]]][i]*factors[j])
+        }
+
+        dd <- sim_func(dat)
+        post_preds[, i] <- dd$R_obs
+        if(i%%200 == 0){print(paste0('pps ', i/nrow(jd)*100, '% complete'))}
+    }
+
+    sumpp <- tibble(date = dat$date,
+                    q_50 = apply(post_preds, 1, median),
+                    q_2.5 = apply(post_preds, 1, quantile, probs = 0.025),
+                    q_97.5 = apply(post_preds, 1, quantile, probs = 0.975))
+
+    if(return_ests){
+        return(list(post_preds = post_preds, summary = sumpp))
+    }
+
+    return(sumpp)
+}
+
+
 # plotting ####
 plot_post_sim <- function(fit, pars, vals, title = NULL, xlim = NULL){
   dd <- data.frame(x = vals, y = length(vals):1)
@@ -12,6 +52,30 @@ plot_post_sim <- function(fit, pars, vals, title = NULL, xlim = NULL){
     xlim(xlim)+
     ggtitle(title)
   return(p)
+}
+
+plot_pp_interval <- function(obs, pp, ylim = NULL, xrng = NULL){
+    pp <- mutate(pp, obs = obs)
+
+    if(is.null(ylim)) ylim = range(pp[,-1], na.rm = T)
+    if(is.null(xrng)) xrng = c(1, length(obs))
+
+    pp <- mutate(pp, q_2.5 = case_when(q_2.5 < ylim[1] ~ ylim[1],
+                                 TRUE ~ q_2.5),
+           q_97.5 = case_when(q_97.5 > ylim[2] ~ ylim[2],
+                             TRUE ~ q_97.5)) %>%
+        slice(xrng[1]:xrng[2])
+    par(mar = c(5,5,4,1))
+    plot(pp$date, pp$q_50, type = 'l', ylim = ylim,
+         xlab = 'Date', ylab = 'Respiration',)
+    polygon(c(pp$date, rev(pp$date)), c(pp$q_2.5, rev(pp$q_97.5)),
+            col = alpha('grey', .5), border = NA, xpd = TRUE)
+    lines(pp$date, pp$obs, col = '#F8766D')
+    legend('topleft', c('observed', 'modeled', '95% PPI'),
+           col = c('#F8766D', 1, NA), fill = c(NA, NA, alpha('grey', 0.5)),
+           lty = c(1,1,NA), border = NA,
+           inset = c(0, -.05), xpd = NA, bty = 'n', ncol = 3)
+
 }
 
 # post pred checks
@@ -180,6 +244,7 @@ plot_ER_ppcheck_SAM5 <- function(mod, ss, figname){
                 bty = 'n', ncol = 3)
     dev.off()
 }
+
 
 # distributions ####
 est_beta_params <- function(mu, sigma) {

@@ -106,3 +106,5 @@ calc_rate_coef <- function(temp_C,
     return(K)
 }
 
+# Simulation functions for specific models: ####
+

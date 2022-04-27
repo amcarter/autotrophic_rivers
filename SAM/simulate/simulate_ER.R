@@ -10,7 +10,7 @@ setwd('C:/Users/alice.carter/git/except_heterotrophy/')
 source('R/data_simulation/simulation_functions.R')
 dat <- readRDS('data_356rivers/high_quality_daily_metabolism_with_SP_covariates.rds')
 
-# add site names and subset to autotrophic sites
+# add trophic state to each site year
 autosites <- read_csv('data_working/autotrophic_siteyears_daily.csv') %>%
     select(site_name) %>% pull() %>% unique()
 
