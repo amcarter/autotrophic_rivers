@@ -60,7 +60,8 @@ prep_data <- function(dat){
         mutate(across(c(-sitecode, -long_name, -date, -DOY),
                       zoo::na.approx, na.rm = F),
             light = Stream_PAR/max(Stream_PAR, na.rm = T),
-            Q = discharge/max(discharge, na.rm = T))
+            Q = discharge/max(discharge, na.rm = T)) %>%
+        filter(!is.na(ER))
 
     dd$litter <- calc_litter_from_LAI(dd)
 
@@ -96,7 +97,8 @@ pecos <- filter(dat, grepl('^Pecos.*?Sheff', long_name)) %>%
 #     geom_line() + geom_line(aes(y = litter)) +
 #     facet_wrap(.~long_name, ncol = 2, scales = 'free')
 
-# Model Simulations ####
+
+# Detrital Carbon Models: ####
 # Run simulations on the New River and Clackamas:
 # Constants
 E_a = 0.63            # activation energy for heterotrophic respiration
@@ -213,6 +215,80 @@ png('figures/simulation_fits/PPcheck_detC_logpi_clack_sim.png')
 dev.off()
 
 
+# Stochastic Antecedent Models: ####
+# Model: SAM5 ####
+# define parameters
+beta_0 = 0.3   # antecedent P coefficient
+beta_p = 0.4   # antecedent P coefficient
+sigma_obs = 0.08
+nweights <- 5
+w <- c(0,0,.5,.5,0)
+antdays = 5
+
+# Constants
+ARf = 0.44            # the fraction of GPP respired by autotrophs
+
+simulate_SAM5 <- function(ss, ANT, antdays){
+    ss <- ss %>%
+        mutate(R = ER,
+               R_obs = ER)
+
+    ndays <- nrow(ss) # number of days
+    ss$Pant = ANT %*% w
+    ss$AR = -ARf * ss$GPP
+
+    for(i in (antdays+1):ndays){
+        ss$R[i] = beta_0 - beta_p * ss$Pant[i] + ss$AR[i]
+    }
+
+    ss$R_obs = rnorm(ndays, ss$R, sigma_obs)
+
+    return(ss)
+}
+
+# Simulate and run
+ANT <- as.matrix(calc_antecedent_drivers(newR$GPP, 5, 1))
+sim_new <- simulate_SAM5(newR, ANT, antdays)
+
+# stan_dat <- list(ndays = nrow(sim_new), nweights = 5, antdays = 5,
+#                  R_obs = sim_new$R_obs, P = sim_new$GPP, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAM5.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             warmup = 500, iter = 1000)
+# beep(sound = 8)
+# saveRDS(mod, 'src/SAM/stan/fits/SAM5_new_sim.rds')
+
+ANT <- as.matrix(calc_antecedent_drivers(clack$GPP, 5, 1))
+sim_clack <- simulate_SAM5(clack, ANT, antdays )
+
+# stan_dat <- list(ndays = nrow(sim_clack), nweights = 5, antdays = 5,
+#                  R_obs = sim_clack$R_obs, P = sim_clack$GPP, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAM5.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             warmup = 500, iter = 1000)
+# beep(sound = 8)
+# saveRDS(mod, 'src/SAM/stan/fits/SAM5_clack_sim.rds')
+
+# evaluate model fit
+mod <- readRDS('src/SAM/stan/fits/SAM5_new_sim.rds')
+pars = c('beta_0', 'beta_p', 'sigma_obs', 'w')
+print(mod, pars)
+t <- traceplot(mod, ncol = 2, pars)
+p <- plot_post_sim(mod, pars, vals = c(beta_0, beta_p, sigma_obs, w),
+                   xlim = c(0,1.5))
+png('figures/simulation_fits/SAM5_sim_newriver.png', height = 300, width = 650)
+plot <- ggpubr::ggarrange(p, t)
+ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det C (New River)',
+                                                      size = 14))
+dev.off()
+
+pp <- calc_pp_ests(mod, newR, pars= pars,
+                   sim_func = simulate_SAM5)
+png('figures/simulation_fits/PPcheck_detC_logpi_newriver_sim.png')
+plot_pp_interval(sim_new$R_obs, pp)#, ylim = c(-30,0))
+dev.off()
 # Model: SAM5_detC_logpi_1 ####
 # define parameters
 C0 = 100       # Initial organic C
@@ -326,7 +402,7 @@ dev.off()
 pp <- calc_pp_ests(mod, newR, pars= pars, factors = c(1, 1, .01, 1, .1, rep(1, 5)),
                    sim_func = simulate_detC_SAM5)
 png('figures/simulation_fits/PPcheck_SAM5_detC_logpi_newriver_sim.png')
-    plot_pp_interval(sim_new$R_obs, pp)#, ylim = c(-30,0))
+    plot_pp_interval(sim_new$R_obs, pp, xrng = c(1,365))
 dev.off()
 
 plot_ER_ppcheck_SAM5(mod, sim_new,
@@ -347,10 +423,10 @@ png('figures/simulation_fits/SAM5_detC_logpi_sim_clack.png', height = 300, width
                                                           size = 14))
 dev.off()
 
-pp <- calc_pp_ests(mod, newR, pars= pars, factors = c(1, 1, .01, 1, .1, rep(1, 5)),
+pp <- calc_pp_ests(mod, clack, pars= pars, factors = c(1, 1, .01, 1, .1, rep(1, 5)),
                    sim_func = simulate_detC_SAM5)
 png('figures/simulation_fits/PPcheck_SAM5_detC_logpi_clack_sim.png')
-    plot_pp_interval(sim_new$R_obs, pp)#, ylim = c(-30,0))
+    plot_pp_interval(sim_clack$R_obs, pp, xrng = c(1,365))
 dev.off()
 
 plot_ER_ppcheck_SAM5(mod, sim_clack,
