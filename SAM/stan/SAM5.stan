@@ -51,7 +51,7 @@ model {
   vector[ndays] R;  // actual respiration (unobserved)
 
   for(i in (antdays+1):ndays){
-    R[i] = beta_0 + AR[i] + beta_p * Pant[i];
+    R[i] = beta_0 + AR[i] - beta_p * Pant[i];
     R_obs[i] ~ normal(R[i], sigma_obs);
   }
 

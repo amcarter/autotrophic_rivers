@@ -41,6 +41,34 @@ calc_pp_ests <- function(mod, dat, sim_func, pars,
     return(sumpp)
 }
 
+calc_pp_ests_SAM <- function(mod, dat, sim_func, pars, ANT, antdays,
+                         factors = NULL, return_ests = FALSE){
+    if(is.null(factors)) factors = rep(1, length(pars))
+    jd <- extract(mod, pars = names(pars)) %>%
+        as_tibble()
+    post_preds <- matrix(NA, nrow = nrow(dat), ncol = nrow(jd))
+    for(i in 1:nrow(jd)){
+        for(j in 1:length(pars)){
+            pars[[j]] = c(pull(jd[i, j]))*factors[j]
+        }
+
+        dd <- sim_func(dat, pars, ANT, antdays)
+        post_preds[, i] <- dd$R_obs
+        if(i%%200 == 0){print(paste0('pps ', i/nrow(jd)*100, '% complete'))}
+    }
+
+    sumpp <- tibble(date = dat$date,
+                    q_50 = apply(post_preds, 1, median),
+                    q_2.5 = apply(post_preds, 1, quantile, probs = 0.025),
+                    q_97.5 = apply(post_preds, 1, quantile, probs = 0.975))
+
+    if(return_ests){
+        return(list(post_preds = post_preds, summary = sumpp))
+    }
+
+    return(sumpp)
+}
+
 
 # plotting ####
 plot_post_sim <- function(fit, pars, vals, title = NULL, xlim = NULL){
@@ -57,14 +85,15 @@ plot_post_sim <- function(fit, pars, vals, title = NULL, xlim = NULL){
 plot_pp_interval <- function(obs, pp, ylim = NULL, xrng = NULL){
     pp <- mutate(pp, obs = obs)
 
-    if(is.null(ylim)) ylim = range(pp[,-1], na.rm = T)
     if(is.null(xrng)) xrng = c(1, length(obs))
+    pp <- slice(pp, xrng[1]:xrng[2])
+    if(is.null(ylim)) ylim = range(pp[,-1], na.rm = T)
 
     pp <- mutate(pp, q_2.5 = case_when(q_2.5 < ylim[1] ~ ylim[1],
                                  TRUE ~ q_2.5),
            q_97.5 = case_when(q_97.5 > ylim[2] ~ ylim[2],
-                             TRUE ~ q_97.5)) %>%
-        slice(xrng[1]:xrng[2])
+                             TRUE ~ q_97.5))
+
     par(mar = c(5,5,4,1))
     plot(pp$date, pp$q_50, type = 'l', ylim = ylim,
          xlab = 'Date', ylab = 'Respiration',)
@@ -231,7 +260,7 @@ plot_ER_ppcheck_SAM5 <- function(mod, ss, figname){
         legend('bottomright', c('ER', 'modeled ER'), col = c(1, 'steelblue'),
                lty = c(1,1), bty = 'n', ncol = 2)
 
-        plot(ss$date, ss$R_mod, type = 'l')
+        plot(ss$date, ss$R_mod, type = 'l', lwd = 0.5)
         polygon(c(ss$date, rev(ss$date)), c(ss$AR, rep(0, ndays)),
                 col = alpha('goldenrod', .5), border = NA)
         polygon(c(ss$date, rev(ss$date)), c(ss$AR, rev(ss$AR + ss$HR_alg)),

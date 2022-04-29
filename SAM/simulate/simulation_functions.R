@@ -32,7 +32,7 @@ calc_litter_from_LAI <- function(dd){
 }
 
 # Antecedent GPP ####
-calc_antecedent_drivers <- function(driver, nints, scale = 1){
+calc_antecedent_drivers <- function(driver, nweights, scale = 1){
     driver <- zoo::na.approx(driver, na.rm = F)
     if(sum(is.na(driver)) > 0) {
         print('the antecedent driver variable should not start or end with NA')
@@ -55,6 +55,7 @@ calc_antecedent_drivers <- function(driver, nints, scale = 1){
             ant[, i] <- ant[, i] + pd
         }
         ant[, i] <- ant[, i]/intervals[i]
+        ant[1:N, i] <- 0
     }
 
     return(ant)
