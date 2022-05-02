@@ -2,6 +2,30 @@
 # A Carter
 # 4/2022
 
+
+# Shear stress and storm sloughing ####
+calc_tau_gm2 <- function(depth, slope){
+    tau = 10^3 * depth * slope
+
+    return(tau)
+}
+# calc_tau_gm2 <- function(depth, width, slope){
+#     hr = width*depth/(width = 2*depth)
+#     tau = 10^3 * hr * slope
+#
+#     return(tau)
+# }
+
+calc_shearstress <- function(tau, tau0){
+    tau_max = max(tau, na.rm = T)
+    ss <- ((tau - tau0)/(tau_max - tau0))^2
+
+    w <- which(tau < tau0)
+    ss[w] <- 0
+
+    return(ss)
+}
+
 # litterfall ####
 calc_litter_oneyear <- function(annual_litter, LAI){
     LAI <- zoo::na.approx(LAI, na.rm = F)

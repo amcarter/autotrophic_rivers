@@ -59,7 +59,7 @@ model {
   //initialize
   Chat[1] = C0;
   C[1] ~ lognormal(log(Chat[1]), sigma_proc/10);
-  R[1] = R_obs[1];
+  R[1] = AR[1] - K[1] * C[1];
 
   // iterate through timesteps:
   for(i in 2:ndays){
