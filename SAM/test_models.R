@@ -256,7 +256,7 @@ simulate_detC_logpi_ss <- function(ss){
 
     ndays <- nrow(ss) # number of days
     ss$K = calc_rate_coef(ss$temp_C, K_20 = K_20)
-    ss$ss = calc_shearstress(ss$tau, tau0)
+    ss$disturb = calc_disturbance(ss$tau, tau0)
 
     Chat = numeric()
     Chat[1] = C0
@@ -266,7 +266,7 @@ simulate_detC_logpi_ss <- function(ss){
     ss$R[1] = ss$AR[1] - ss$K[1] * ss$C[1]
 
     for(i in 2:ndays){
-        Chat[i] = ss$C[i-1]*(1-0.8 *ss$ss[i]) +
+        Chat[i] = ss$C[i-1]*(1-0.8 *ss$disturb[i]) +
             ss$litter[i] + ss$R[i-1] + ss$GPP[i-1]
         ss$C[i] = exp(rnorm(1, log(Chat[i]), sigma_proc))
         ss$R[i] = ss$AR[i] - ss$K[i]*ss$C[i]
@@ -279,29 +279,29 @@ simulate_detC_logpi_ss <- function(ss){
 
 # Simulate and run
 sim_new <- simulate_detC_logpi_ss(newR)
-sim_new %>% select(date, GPP, ss, R, ER,C, litter )%>%
+sim_new %>% select(date, GPP, disturb, R, ER,C, litter )%>%
     pivot_longer(-date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
-pars = c( 'tau0', 'sigma_obs', 'sigma_proc', 'K_20')
+pars = c( 'tau0', 'sigma_obs', 'sigma_proc_scaled', 'K_20_scaled')
 
-stan_dat <- list(ndays = nrow(sim_new), R_obs = sim_new$R_obs, P = sim_new$GPP,
-                 C0 = 100, temp = sim_new$temp_C, litter = sim_new$litter,
-                 tau = sim_new$tau)
-mod <- stan('src/SAM/stan/detC_logpi_ss.stan',
-            data = stan_dat,
-            chains = 4,  cores = 4,
-            warmup = 500, iter = 1000)
-beep(sound = 8)
-saveRDS(mod, 'src/SAM/stan/fits/detC_logpi_ss_new_sim.rds')
-
-# mod <- readRDS('src/SAM/stan/fits/detC_logpi_ss_new_sim.rds')
-pp <- calc_pp_ests(mod, newR, pars= pars, factors = c(1, 1, 1, .1, .01),
-                   sim_func = simulate_detC_logpi_ss)
-
-saveRDS(list(mod = mod, post_preds = pp),
-        'src/SAM/stan/fits/detC_logpi_ss_new_sim_pp.rds')
+# stan_dat <- list(ndays = nrow(sim_new), R_obs = sim_new$R_obs, P = sim_new$GPP,
+#                  C0 = 100, temp = sim_new$temp_C, litter = sim_new$litter,
+#                  tau = sim_new$tau)
+# mod <- stan('src/SAM/stan/detC_logpi_ss.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             warmup = 500, iter = 1000)
+# beep(sound = 8)
+# saveRDS(mod, 'src/SAM/stan/fits/detC_logpi_ss_new_sim.rds')
+#
+# # mod <- readRDS('src/SAM/stan/fits/detC_logpi_ss_new_sim.rds')
+# pp <- calc_pp_ests(mod, newR, pars= pars, factors = c(1, 1, .1, .01),
+#                    sim_func = simulate_detC_logpi_ss)
+#
+# saveRDS(list(mod = mod, post_preds = pp),
+#         'src/SAM/stan/fits/detC_logpi_ss_new_sim_pp.rds')
 m <- readRDS('src/SAM/stan/fits/detC_logpi_ss_new_sim_pp.rds')
 mod <- m$mod
 pp <- m$post_preds
@@ -316,58 +316,62 @@ p <- plot_post_sim(mod, pars, vals = c(beta_s, sigma_obs, sigma_proc*10, K_20*10
 png('figures/simulation_fits/detC_logpi_ss_sim_newriver.png',
     height = 300, width = 650)
     plot <- ggpubr::ggarrange(p, t)
-    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery
-                                                          det C log pe, shear stress
-                                                          (New River)',
+    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det C log pe, shear stress (New River)',
                                                           size = 14))
 dev.off()
 
 
 
 sim_clack <- simulate_detC_logpi_ss(clack)
-sim_clack %>% select(date, GPP, ss, R, ER,C, litter )%>%
+sim_clack %>% select(date, GPP, disturb, R, ER,C, litter )%>%
     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 pars = c( 'tau0', 'sigma_obs', 'sigma_proc_scaled', 'K_20_scaled')
 
-stan_dat <- list(ndays = nrow(sim_clack), R_obs = sim_clack$R_obs,
-                 P = sim_clack$GPP, C0 = 100, temp = sim_clack$temp_C,
-                 litter = sim_clack$litter, tau = sim_clack$tau)
-mod <- stan('src/SAM/stan/detC_logpi_ss.stan',
-            data = stan_dat,
-            chains = 4,  cores = 4,
-            warmup = 500, iter = 1000)
-beep(sound = 8)
-saveRDS(mod, 'src/SAM/stan/fits/detC_logpi_ss_clack_sim.rds')
-
-mod <- readRDS('src/SAM/stan/fits/detC_logpi_ss_clack_sim.rds')
-pp <- calc_pp_ests(mod, clack, pars= pars, factors = c(1, 1, .1, .01),
-                   sim_func = simulate_detC_logpi)
-saveRDS(list(mod = mod, post_preds = pp),
-        'src/SAM/stan/fits/detC_logpi_ss_clack_sim_pp.rds')
+# stan_dat <- list(ndays = nrow(sim_clack), R_obs = sim_clack$R_obs,
+#                  P = sim_clack$GPP, C0 = 100, temp = sim_clack$temp_C,
+#                  litter = sim_clack$litter, tau = sim_clack$tau)
+# mod <- stan('src/SAM/stan/detC_logpi_ss.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             warmup = 500, iter = 1000)
+# beep(sound = 8)
+# saveRDS(mod, 'src/SAM/stan/fits/detC_logpi_ss_clack_sim.rds')
+#
+# # mod <- readRDS('src/SAM/stan/fits/detC_logpi_ss_clack_sim.rds')
+# pp <- calc_pp_ests(mod, clack, pars= pars, factors = c(1, 1, .1, .01),
+#                    sim_func = simulate_detC_logpi_ss)
+# saveRDS(list(mod = mod, post_preds = pp),
+#         'src/SAM/stan/fits/detC_logpi_ss_clack_sim_pp.rds')
 m <- readRDS('src/SAM/stan/fits/detC_logpi_ss_clack_sim_pp.rds')
 mod <- m$mod
 pp <- m$post_preds
 print(mod, pars = pars)
-png('figures/simulation_fits/detC_logpi_sim_clack_pairs.png')
+png('figures/simulation_fits/detC_logpi_ss_sim_clack_pairs.png')
     pairs(mod, pars = c(pars, 'lp__'))
 dev.off()
 t <- traceplot(mod, ncol = 2, pars = pars)
-p <- plot_post_sim(mod, pars = pars, xlim = c(0, 1.2),
+p <- plot_post_sim(mod, pars = pars, xlim = c(0, 3),
               vals = c( tau0, sigma_obs, sigma_proc*10, K_20*100))
-png('figures/simulation_fits/detC_logpi_sim_clack_chains.png', height = 300, width = 650)
+png('figures/simulation_fits/detC_logpi_ss_sim_clack_chains.png', height = 300, width = 650)
     plot <- ggpubr::ggarrange(p, t)
     ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det C log process error (clackamas)',
                                                           size = 14))
 dev.off()
 
-png('figures/simulation_fits/detC_logpi_sim_clack_PPcheck.png')
+png('figures/simulation_fits/detC_logpi_ss_sim_clack_PPcheck.png')
     plot_pp_interval(sim_clack$R_obs, pp, xrng = c(1,365))
 dev.off()
 
-
+cmod <- apply(data.frame(extract(mod, pars = 'C')), 2, median)
+plot(sim_clack$date, sim_clack$C, type = 'l')
+points(sim_clack$date, cmod)
+mean(sim_clack$C)
+mean(cmod)*2.89
+glimpse(cmod)
+fit$summary[2:(nrow(fit$summary)-2),1]
 # Model: detC ####
 # define parameters
 C0 = 100       # Initial organic C
@@ -652,22 +656,22 @@ dev.off()
 ANT <- as.matrix(calc_antecedent_drivers(clack$GPP, 4, 2))
 sim_clack <- simulate_SAM5(clack, pars, ANT, antdays )
 
-stan_dat <- list(ndays = nrow(sim_clack), nweights = nweights,
-                 antdays = antdays,
-                 R_obs = sim_clack$ER, P = sim_clack$GPP, ANT = ANT)
-mod <- stan('src/SAM/stan/SAM5.stan',
-            data = stan_dat,
-            chains = 4,  cores = 4,
-            warmup = 500, iter = 1000)
-beep(sound = 8)
-saveRDS(mod, 'src/SAM/stan/fits/SAMlogint_clack_sim.rds')
-
-mod <- readRDS('src/SAM/stan/fits/SAMlogint_clack_sim.rds')
-
-pp <- calc_pp_ests_SAM(mod, clack, pars = pars, ANT = ANT, antdays = antdays,
-                   sim_func = simulate_SAM5, return_ests = T)
-saveRDS(list(mod = mod, post_preds = pp),
-        'src/SAM/stan/fits/SAMlogint_clack_sim_pp.rds')
+# stan_dat <- list(ndays = nrow(sim_clack), nweights = nweights,
+#                  antdays = antdays,
+#                  R_obs = sim_clack$ER, P = sim_clack$GPP, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAM5.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             warmup = 500, iter = 1000)
+# beep(sound = 8)
+# saveRDS(mod, 'src/SAM/stan/fits/SAMlogint_clack_sim.rds')
+#
+# mod <- readRDS('src/SAM/stan/fits/SAMlogint_clack_sim.rds')
+#
+# pp <- calc_pp_ests_SAM(mod, clack, pars = pars, ANT = ANT, antdays = antdays,
+#                    sim_func = simulate_SAM5, return_ests = T)
+# saveRDS(list(mod = mod, post_preds = pp),
+#         'src/SAM/stan/fits/SAMlogint_clack_sim_pp.rds')
 m <- readRDS('src/SAM/stan/fits/SAMlogint_clack_sim_pp.rds')
 mod <- m$mod
 pp <- m$post_preds
@@ -683,6 +687,144 @@ dev.off()
 
 png('figures/simulation_fits/PPcheck_SAMlogints_clack_sim.png')
     plot_pp_interval(sim_clack$R_obs, pp, xrng = c(365,730))#, ylim = c(-3,0.5))
+dev.off()
+
+# Model: SAMlogint_detC_logpi_ss ####
+# define parameters
+pars = list(K_20 = .01,     # Heterotrophic respiration at 20 C
+            tau0 = 0.5,   # Percent removal of organic carbon from max storm
+            beta_p = 0.3,   # antecedent P coefficient
+            sigma_proc = .02, # lognormally distributed, so this is a % error
+            sigma_obs = 0.08,
+            w = c(0,0,.5,.5))
+
+C0 = 100       # Initial organic C
+nweights <- 4
+antdays <- 30
+
+simulate_SAMint_detC_logpi_ss <- function(ss, pars, ANT, antdays){
+    ss <- ss %>%
+        mutate(C = 0.5,
+               R = 0.5,HR = 0.5,
+               R_obs = ER) %>%
+        select(date, GPP, ER, R_obs, R, HR, light, Q, temp_C, litter, tau, C)
+
+    ARf = 0.44 # fraction of autotrophic respiration
+    C0 = 100
+
+    ndays <- nrow(ss) # number of days
+    ss$Pant = ANT %*% pars$w
+
+    ss$K = calc_rate_coef(ss$temp_C, K_20 = K_20)
+    ss$disturb = calc_disturbance(ss$tau, tau0)
+
+    Chat = numeric()
+    Chat[1] = C0
+    ss$C[1] = exp(rnorm(1, log(C0), pars$sigma_proc))
+    ss$AR = -ARf * ss$GPP
+    ss$HR[1] = - ss$K[1] * ss$C[1]
+
+    for(i in 2:ndays){
+        Chat[i] = ss$C[i-1]*(1-0.8 *ss$disturb[i]) +
+            ss$litter[i] + ss$HR[i-1]
+        ss$C[i] = exp(rnorm(1, log(Chat[i]), pars$sigma_proc))
+        ss$HR[i] = - ss$K[i]*ss$C[i]
+    }
+    # observation model:
+    ss$R = ss$HR - pars$beta_p * ss$Pant + ss$AR
+    ss$R_obs = rnorm(ndays, ss$R, pars$sigma_obs)
+
+    return(ss)
+}
+
+# Simulate and run
+ANT <- as.matrix(calc_antecedent_drivers(newR$GPP, 4, 2))
+sim_new <- simulate_SAMint_detC_logpi_ss(newR, pars, ANT, antdays)
+sim_new %>% select(date, GPP, disturb, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
+# pars = c( 'tau0', 'sigma_obs', 'sigma_proc_scaled', 'K_20_scaled')
+
+stan_dat <- list(ndays = nrow(sim_new), nweights = nweights, antdays = antdays,
+                 R_obs = sim_new$R_obs, P = sim_new$GPP, C0 = 100, ANT = ANT,
+                 temp = sim_new$temp_C, litter = sim_new$litter, tau = sim_new$tau)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            warmup = 500, iter = 1000)
+beep(sound = 8)
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_new_sim.rds')
+
+# mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_new_sim.rds')
+pp <- calc_pp_ests(mod, newR, pars= pars, factors = c(1, 1, .1, .01),
+                   sim_func = simulate_detC_logpi_ss)
+
+saveRDS(list(mod = mod, post_preds = pp),
+        'src/SAM/stan/fits/SAMint_detC_logpi_ss_new_sim_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_new_sim_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
+png('figures/simulation_fits/PPcheck_SAMint_detC_logpi_ss_newriver_sim.png')
+    plot_pp_interval(sim_new$R_obs, pp)#, ylim = c(-30,0))
+dev.off()
+
+print(mod, pars)
+t <- traceplot(mod, ncol = 2, names(pars))
+p <- plot_post_sim(mod, names(pars),
+                   unlist(pars),
+                   xlim = c(0,1.7))
+png('figures/simulation_fits/SAMint_detC_logpi_ss_sim_newriver.png',
+    height = 300, width = 650)
+    plot <- ggpubr::ggarrange(p, t)
+    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery SAMint det C log pe, shear stress (New River)',
+                                                          size = 14))
+dev.off()
+
+# clackamas
+ANT <- as.matrix(calc_antecedent_drivers(clack$GPP, 4, 2))
+sim_clack <- simulate_SAMint_detC_logpi_ss(clack, pars, ANT, antdays)
+sim_clack %>% select(date, GPP, disturb, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
+# pars = c( 'tau0', 'sigma_obs', 'sigma_proc_scaled', 'K_20_scaled')
+
+stan_dat <- list(ndays = nrow(sim_clack), nweights = nweights, antdays = antdays,
+                 R_obs = sim_clack$R_obs, P = sim_clack$GPP, C0 = 100, ANT = ANT,
+                 temp = sim_clack$temp_C, litter = sim_clack$litter, tau = sim_clack$tau)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            warmup = 500, iter = 1000)
+beep(sound = 8)
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_sim.rds')
+
+# mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_sim.rds')
+pp <- calc_pp_ests(mod, clack, pars= pars,
+                   sim_func = simulate_detC_logpi_ss)
+
+saveRDS(list(mod = mod, post_preds = pp),
+        'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_sim_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_sim_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
+png('figures/simulation_fits/PPcheck_SAMint_detC_logpi_ss_clackiver_sim.png')
+    plot_pp_interval(sim_clack$R_obs, pp)#, ylim = c(-30,0))
+dev.off()
+
+print(mod, pars)
+t <- traceplot(mod, ncol = 2, names(pars))
+p <- plot_post_sim(mod, names(pars),
+                   unlist(pars),
+                   xlim = c(0,1.7))
+png('figures/simulation_fits/SAMint_detC_logpi_ss_sim_clackiver.png',
+    height = 300, width = 650)
+    plot <- ggpubr::ggarrange(p, t)
+    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery SAMint det C log pe, shear stress (clack River)',
+                                                          size = 14))
 dev.off()
 
 # Model: SAM5_detC_logpi ####
@@ -835,251 +977,192 @@ plot_ER_ppcheck_SAM5(mod, sim_clack,
 
 # Run on actual rivers ####
 #clackamas
-ANT <- as.matrix(calc_antecedent_drivers(clack$GPP, 5, 1))
-sim_clack <- simulate_detC_SAM5(clack, pars, ANT, antdays)
+ANT <- as.matrix(calc_antecedent_drivers(clack$GPP, 4, 2))
+sim_clack <- simulate_SAMint_detC_logpi_ss(clack, pars, ANT, antdays)
 sim_clack %>% select(date, GPP, Q, R, ER,C, litter )%>%
     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-# stan_dat <- list(ndays = nrow(sim_clack), nweights = 5, antdays = antdays,
-#                  R_obs = sim_clack$ER, P = sim_clack$GPP, C0 = 100,
-#                  temp = sim_clack$temp_C, litter = sim_clack$litter,
-#                  Q = sim_clack$Q, ANT = ANT)
-# mod <- stan('src/SAM/stan/SAM5_detC_logpi.stan',
-#             data = stan_dat,
-#             chains = 4,  cores = 4,
-#             warmup = 500, iter = 1000)
-# beep(sound = 8)
-# saveRDS(mod, 'src/SAM/stan/fits/SAM5_detC_logpi_clack.rds')
-#
-# mod <- readRDS('src/SAM/stan/fits/SAM5_detC_logpi_clack.rds')
+stan_dat <- list(ndays = nrow(sim_clack), nweights = nweights, antdays = antdays,
+                 R_obs = sim_clack$ER, P = sim_clack$GPP, C0 = 100,
+                 temp = sim_clack$temp_C, litter = sim_clack$litter,
+                 tau = sim_clack$tau, ANT = ANT)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000)
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack.rds')
+beep(sound = 8)
+
+# mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack.rds')
 # pp <- calc_pp_ests_SAM(mod, clack, pars = pars, ANT = ANT, antdays = antdays,
 #                        sim_func = simulate_detC_SAM5,
 #                        factors = c(.01, 1, 1, .1, 1, 1, 1, 1, 1, 1))
 # saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/SAM5_detC_clack_pp.rds')
-m <- readRDS('src/SAM/stan/fits/SAM5_detC_clack_pp.rds')
-mod <- m$mod
-pp <- m$post_preds
+#         'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_pp.rds')
+# m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_pp.rds')
+# mod <- m$mod
+# pp <- m$post_preds
 
-traceplot(mod, ncol = 2, names(pars))
-plot(mod, pars = names(pars))
-pairs(mod, pars = c(names(pars), 'lp__'))
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+                         'sigma_obs', 'lp__'))
 
-png('figures/simulation_fits/SAM5_detC_clack_PPcheck.png')
-    plot_pp_interval(sim_clack$R_obs, pp, xrng = c(365, 730))#, ylim = c(-3,0.5))
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_clack.png', height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
 dev.off()
-
-plot_ER_ppcheck_SAM5(mod, sim_clack,
-                'figures/simulation_fits/PPcheck_SAM5_detC_logpi_clack.png')
+# png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_clack_PPcheck.png')
+#     plot_pp_interval(sim_clack$R_obs, pp, xrng = c(365, 730))#, ylim = c(-3,0.5))
+# dev.off()
+#
+# plot_ER_ppcheck_SAM5(mod, sim_clack,
+#                 'figures/simulation_fits/rivers/PPcheck_SAM5_detC_logpi_clack.png')
 
 # Pecos
-ANT <- as.matrix(calc_antecedent_drivers(pecos$GPP, 5, 1))
-sim_pecos <- simulate_detC_SAM5(pecos, pars, ANT, antdays)
+ANT <- as.matrix(calc_antecedent_drivers(pecos$GPP, 4, 2))
+sim_pecos <- simulate_SAMint_detC_logpi_ss(pecos, pars, ANT, antdays)
 sim_pecos %>% select(date, GPP, Q, R, ER,C, litter )%>%
     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-# stan_dat <- list(ndays = nrow(sim_pecos), nweights = 5, antdays = antdays,
-#                  R_obs = sim_pecos$ER, P = sim_pecos$GPP, C0 = 100,
-#                  temp = sim_pecos$temp_C, litter = sim_pecos$litter,
-#                  Q = sim_pecos$Q, ANT = ANT)
-# mod <- stan('src/SAM/stan/SAM5_detC_logpi.stan',
-#             data = stan_dat,
-#             chains = 4,  cores = 4,
-#             warmup = 500, iter = 1000)
-# beep(sound = 8)
-# saveRDS(mod, 'src/SAM/stan/fits/SAM5_detC_logpi_pecos.rds')
-#
-# mod <- readRDS('src/SAM/stan/fits/SAM5_detC_logpi_pecos.rds')
-# pp <- calc_pp_ests_SAM(mod, pecos, pars = pars, ANT = ANT, antdays = antdays,
-#                        sim_func = simulate_detC_SAM5,
-#                        factors = c(.01, 1, 1, .1, 1, 1, 1, 1, 1, 1))
-# saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/SAM5_detC_pecos_pp.rds')
-m <- readRDS('src/SAM/stan/fits/SAM5_detC_pecos_pp.rds')
-mod <- m$mod
-pp <- m$post_preds
+stan_dat <- list(ndays = nrow(sim_pecos), nweights = nweights, antdays = antdays,
+                 R_obs = sim_pecos$ER, P = sim_pecos$GPP, C0 = 100,
+                 temp = sim_pecos$temp_C, litter = sim_pecos$litter,
+                 tau = sim_pecos$tau, ANT = ANT)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000)
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_pecos.rds')
+beep(sound = 8)
 
-traceplot(mod, ncol = 2, names(pars))
-plot(mod, pars = names(pars))
-pairs(mod, pars = c(names(pars), 'lp__'))
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+                         'sigma_obs', 'lp__'))
 
-png('figures/simulation_fits/SAM5_detC_pecos_PPcheck.png')
-    plot_pp_interval(sim_pecos$R_obs, pp)#, ylim = c(-3,0.5))
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_pecos.png', height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
 dev.off()
-
-plot_ER_ppcheck_SAM5(mod, sim_pecos,
-                'figures/simulation_fits/PPcheck_SAM5_detC_logpi_pecos.png')
 
 
 # Grand
-# ANT <- as.matrix(calc_antecedent_drivers(grand$GPP, 5, 1))
-# sim_grand <- simulate_detC_SAM5(grand, pars, ANT, antdays)
-# sim_grand %>% select(date, GPP, Q, R, ER,C, litter )%>%
-#     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
-#     ggplot(aes(date, value, col = var)) +
-#     geom_line()+
-#     facet_wrap(.~var, scales = 'free_y', ncol = 2)
-#
-# stan_dat <- list(ndays = nrow(sim_grand), nweights = 5, antdays = antdays,
-#                  R_obs = sim_grand$ER, P = sim_grand$GPP, C0 = 100,
-#                  temp = sim_grand$temp_C, litter = sim_grand$litter,
-#                  Q = sim_grand$Q, ANT = ANT)
-# mod <- stan('src/SAM/stan/SAM5_detC_logpi.stan',
-#             data = stan_dat,
-#             chains = 4,  cores = 4,
-#             warmup = 500, iter = 1000)
-# beep(sound = 8)
-# saveRDS(mod, 'src/SAM/stan/fits/SAM5_detC_logpi_grand.rds')
-#
-# mod <- readRDS('src/SAM/stan/fits/SAM5_detC_logpi_grand.rds')
-# pp <- calc_pp_ests_SAM(mod, grand, pars = pars, ANT = ANT, antdays = antdays,
-#                        sim_func = simulate_detC_SAM5,
-#                        factors = c(.01, 1, 1, .1, 1, 1, 1, 1, 1, 1))
-# saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/SAM5_detC_grand_pp.rds')
-m <- readRDS('src/SAM/stan/fits/SAM5_detC_grand_pp.rds')
-mod <- m$mod
-pp <- m$post_preds
+ANT <- as.matrix(calc_antecedent_drivers(grand$GPP, 4, 2))
+sim_grand <- simulate_SAMint_detC_logpi_ss(grand, pars, ANT, antdays)
+sim_grand %>% select(date, GPP, Q, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-traceplot(mod, ncol = 2, names(pars))
-plot(mod, pars = names(pars))
-pairs(mod, pars = c(names(pars), 'lp__'))
+stan_dat <- list(ndays = nrow(sim_grand), nweights = nweights, antdays = antdays,
+                 R_obs = sim_grand$ER, P = sim_grand$GPP, C0 = 100,
+                 temp = sim_grand$temp_C, litter = sim_grand$litter,
+                 tau = sim_grand$tau, ANT = ANT)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000)
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_grand.rds')
+beep(sound = 8)
 
-png('figures/simulation_fits/SAM5_detC_grand_PPcheck.png')
-    plot_pp_interval(sim_grand$R_obs, pp)#, ylim = c(-3,0.5))
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+                         'sigma_obs', 'lp__'))
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_grand.png', height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
 dev.off()
 
-plot_ER_ppcheck_SAM5(mod, sim_grand,
-                     'figures/simulation_fits/PPcheck_SAM5_detC_logpi_grand.png')
-
-
 # Fanno
-ANT <- as.matrix(calc_antecedent_drivers(fanno$GPP, 5, 1))
-sim_fanno <- simulate_detC_SAM5(fanno, pars, ANT, antdays)
+ANT <- as.matrix(calc_antecedent_drivers(fanno$GPP, 4, 2))
+sim_fanno <- simulate_SAMint_detC_logpi_ss(fanno, pars, ANT, antdays)
 sim_fanno %>% select(date, GPP, Q, R, ER,C, litter )%>%
     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-# stan_dat <- list(ndays = nrow(sim_fanno), nweights = 5, antdays = antdays,
-#                  R_obs = sim_fanno$ER, P = sim_fanno$GPP, C0 = 100,
-#                  temp = sim_fanno$temp_C, litter = sim_fanno$litter,
-#                  Q = sim_fanno$Q, ANT = ANT)
-# mod <- stan('src/SAM/stan/SAM5_detC_logpi.stan',
-#             data = stan_dat,
-#             chains = 4,  cores = 4,
-#             warmup = 500, iter = 1000)
-# beep(sound = 8)
-# saveRDS(mod, 'src/SAM/stan/fits/SAM5_detC_logpi_fanno.rds')
-#
-# mod <- readRDS('src/SAM/stan/fits/SAM5_detC_logpi_fanno.rds')
-# pp <- calc_pp_ests_SAM(mod, fanno, pars = pars, ANT = ANT, antdays = antdays,
-#                        sim_func = simulate_detC_SAM5,
-#                        factors = c(.01, 1, 1, .1, 1, 1, 1, 1, 1, 1))
-# saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/SAM5_detC_fanno_pp.rds')
-m <- readRDS('src/SAM/stan/fits/SAM5_detC_fanno_pp.rds')
-mod <- m$mod
-pp <- m$post_preds
+stan_dat <- list(ndays = nrow(sim_fanno), nweights = nweights, antdays = antdays,
+                 R_obs = sim_fanno$ER, P = sim_fanno$GPP, C0 = 100,
+                 temp = sim_fanno$temp_C, litter = sim_fanno$litter,
+                 tau = sim_fanno$tau, ANT = ANT)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000)
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_fanno.rds')
+beep(sound = 8)
 
-traceplot(mod, ncol = 2, names(pars))
-plot(mod, pars = names(pars))
-pairs(mod, pars = c(names(pars), 'lp__'))
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+                         'sigma_obs', 'lp__'))
 
-png('figures/simulation_fits/SAM5_detC_fanno_PPcheck.png')
-    plot_pp_interval(sim_fanno$R_obs, pp)#, ylim = c(-3,0.5))
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_fanno.png', height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
 dev.off()
 
-plot_ER_ppcheck_SAM5(mod, sim_fanno,
-                     'figures/simulation_fits/PPcheck_SAM5_detC_logpi_fanno.png')
-
-
 # East
-ANT <- as.matrix(calc_antecedent_drivers(east$GPP, 5, 1))
-sim_east <- simulate_detC_SAM5(east, pars, ANT, antdays)
+ANT <- as.matrix(calc_antecedent_drivers(east$GPP, 4, 2))
+sim_east <- simulate_SAMint_detC_logpi_ss(east, pars, ANT, antdays)
 sim_east %>% select(date, GPP, Q, R, ER,C, litter )%>%
     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-# stan_dat <- list(ndays = nrow(sim_east), nweights = 5, antdays = antdays,
-#                  R_obs = sim_east$ER, P = sim_east$GPP, C0 = 100,
-#                  temp = sim_east$temp_C, litter = sim_east$litter,
-#                  Q = sim_east$Q, ANT = ANT)
-# mod <- stan('src/SAM/stan/SAM5_detC_logpi.stan',
-#             data = stan_dat,
-#             chains = 4,  cores = 4,
-#             warmup = 500, iter = 1000)
-# beep(sound = 8)
-# saveRDS(mod, 'src/SAM/stan/fits/SAM5_detC_logpi_east.rds')
-#
-# mod <- readRDS('src/SAM/stan/fits/SAM5_detC_logpi_east.rds')
-# pp <- calc_pp_ests_SAM(mod, east, pars = pars, ANT = ANT, antdays = antdays,
-#                        sim_func = simulate_detC_SAM5,
-#                        factors = c(.01, 1, 1, .1, 1, 1, 1, 1, 1, 1))
-# saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/SAM5_detC_east_pp.rds')
-m <- readRDS('src/SAM/stan/fits/SAM5_detC_east_pp.rds')
-mod <- m$mod
-pp <- m$post_preds
+stan_dat <- list(ndays = nrow(sim_east), nweights = nweights, antdays = antdays,
+                 R_obs = sim_east$ER, P = sim_east$GPP, C0 = 100,
+                 temp = sim_east$temp_C, litter = sim_east$litter,
+                 tau = sim_east$tau, ANT = ANT)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000)
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_east.rds')
+beep(sound = 8)
 
-traceplot(mod, ncol = 2, names(pars))
-pairs(mod, pars = c(names(pars), 'lp__'))
-plot(mod, pars = names(pars))
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+                         'sigma_obs', 'lp__'))
 
-png('figures/simulation_fits/SAM5_detC_east_PPcheck.png')
-    plot_pp_interval(sim_east$R_obs, pp)#, ylim = c(-3,0.5))
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_east.png', height = 800, width = 400)
+    ggpubr::ggarrange(a, b,ncol = 1)
 dev.off()
-
-plot_ER_ppcheck_SAM5(mod, sim_east,
-                     'figures/simulation_fits/PPcheck_SAM5_detC_logpi_east.png')
-
 
 # newR
-# ANT <- as.matrix(calc_antecedent_drivers(newR$GPP, 5, 1))
-# sim_new <- simulate_detC_SAM5(newR, pars, ANT, antdays)
-# sim_new %>% select(date, GPP, Q, R, ER,C, litter )%>%
-#     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
-#     ggplot(aes(date, value, col = var)) +
-#     geom_line()+
-#     facet_wrap(.~var, scales = 'free_y', ncol = 2)
-#
-# stan_dat <- list(ndays = nrow(sim_new), nweights = 5, antdays = antdays,
-#                  R_obs = sim_new$ER, P = sim_new$GPP, C0 = 100,
-#                  temp = sim_new$temp_C, litter = sim_new$litter,
-#                  Q = sim_new$Q, ANT = ANT)
-# mod <- stan('src/SAM/stan/SAM5_detC_logpi.stan',
-#             data = stan_dat,
-#             chains = 4,  cores = 4,
-#             warmup = 500, iter = 1000)
-# beep(sound = 8)
-# saveRDS(mod, 'src/SAM/stan/fits/SAM5_detC_logpi_new.rds')
-#
-# mod <- readRDS('src/SAM/stan/fits/SAM5_detC_logpi_new.rds')
-# pp <- calc_pp_ests_SAM(mod, newR, pars = pars, ANT = ANT, antdays = antdays,
-#                        sim_func = simulate_detC_SAM5,
-#                        factors = c(.01, 1, 1, .1, 1, 1, 1, 1, 1, 1))
-# saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/SAM5_detC_new_pp.rds')
-m <- readRDS('src/SAM/stan/fits/SAM5_detC_new_pp.rds')
-mod <- m$mod
-pp <- m$post_preds
+ANT <- as.matrix(calc_antecedent_drivers(newR$GPP, 4, 2))
+sim_new <- simulate_SAMint_detC_logpi_ss(newR, pars, ANT, antdays)
+sim_new %>% select(date, GPP, Q, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-traceplot(mod, ncol = 2, names(pars))
-plot(mod, pars = names(pars))
-pairs(mod, pars = c(names(pars), 'lp__'))
+stan_dat <- list(ndays = nrow(sim_new), nweights = nweights, antdays = antdays,
+                 R_obs = sim_new$ER, P = sim_new$GPP, C0 = 100,
+                 temp = sim_new$temp_C, litter = sim_new$litter,
+                 tau = sim_new$tau, ANT = ANT)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000)
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_new.rds')
+beep(sound = 8)
 
-png('figures/simulation_fits/SAM5_detC_new_PPcheck.png')
-    plot_pp_interval(sim_new$R_obs, pp, xrng = c(365, 730))#, ylim = c(-3,0.5))
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+                         'sigma_obs', 'lp__'))
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_new.png', height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
 dev.off()
-
-plot_ER_ppcheck_SAM5(mod, sim_new,
-                     'figures/simulation_fits/PPcheck_SAM5_detC_logpi_new.png')

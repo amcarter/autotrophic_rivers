@@ -16,14 +16,13 @@ calc_tau_gm2 <- function(depth, slope){
 #     return(tau)
 # }
 
-calc_shearstress <- function(tau, tau0){
+calc_disturbance <- function(tau, tau0){
     tau_max = max(tau, na.rm = T)
-    ss <- ((tau - tau0)/(tau_max - tau0))^2
+    x2 = case_when(tau < tau0 ~ 0,
+                   TRUE ~ 1/(tau_max - tau0))
+    disturb <- ((tau - tau0)*x2)^2
 
-    w <- which(tau < tau0)
-    ss[w] <- 0
-
-    return(ss)
+    return(disturb)
 }
 
 # litterfall ####
