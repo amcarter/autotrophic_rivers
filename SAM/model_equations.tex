@@ -1,0 +1,132 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+%
+\documentclass[
+]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{lmodern}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math}
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\hypersetup{
+  pdftitle={Model Equations},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+\urlstyle{same} % disable monospaced font for URLs
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+% Scale images if necessary, so that they will not overflow the page
+% margins by default, and it is still possible to overwrite the defaults
+% using explicit options in \includegraphics[width, height, ...]{}
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+% Set default figure placement to htbp
+\makeatletter
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+
+\title{Model Equations}
+\author{}
+\date{\vspace{-2.5em}2022-05-03}
+
+\begin{document}
+\maketitle
+
+\[ER_t = AR_t + HR_{A,t} + HR_{D,t} + \epsilon_{obs,t}\]
+
+\hypertarget{autotrophic-respiration}{%
+\paragraph{Autotrophic Respiration}\label{autotrophic-respiration}}
+
+\(AR_t = AR_f \times GPP_t\)\\
+\(AR_f = 0.44\)
+
+\hypertarget{latent-carbon-model}{%
+\paragraph{Latent Carbon Model:}\label{latent-carbon-model}}
+
+\[HR_{D,t} = - K_t \times C_t\]
+\[K_t = K_{20} \times e ^ {\frac{E_a}{k_b}(\frac{1}{T_t} - \frac{1}{293})}\]
+\[C_t = (C_{t-1}\times S_t + HR_{D,t} + L_t) \times \epsilon_{proc,t}\]
+\[S_t = 1-0.8 \times \left( \frac{\tau(t) - \tau_0}{\tau_{max} - \tau_0} \right) ^2\]
+\[\tau_t = \gamma_w \times r_t \times slope\]
+\[\epsilon_{proc,t} \sim logNormal(0, \sigma_{proc})\]
+
+Where allochthonous carbon inputs through litterfall \((L)\) are a fixed
+seasonal input to the system and the scour of detrital carbon \((S)\) is
+a function of the shear stress \((\tau)\) calculated using the speficic
+density of water \((\gamma_w)\), the hydraulic radius \((r)\) and the
+stream bed slope.
+
+\hypertarget{stochastic-antecedent-model}{%
+\paragraph{Stochastic Antecedent
+Model:}\label{stochastic-antecedent-model}}
+
+\[HR_{A,t} = \beta_p \cdot \sum_{j=1}^N P_{ant,j}(t) * w_j\]
+\[P_{ant,j}(t) = \sum_{\Delta t \in I_j}\frac{GPP(t-\Delta t)}{N(I_j)}\]
+\[0 \leq w \leq 1, \sum_j w_j = 1\]
+
+\hypertarget{observation-model}{%
+\paragraph{Observation model:}\label{observation-model}}
+
+\[R_{obs}(t) \sim N(R(t), \sigma_{obs})\]
+
+\hypertarget{priors-on-parameters}{%
+\paragraph{Priors on parameters}\label{priors-on-parameters}}
+
+\(C_0 \sim\), The initial detrital C in the system \(C_t \sim\),
+Detrital carbon at each timestep\\
+\(K_{20} \sim\), The carbon decay rate at 20 C\\
+\(\beta_s \sim\), The coefficient on scour as a function of shear
+stress\\
+\(\tau_0 \sim\), The minimum shear stress required for bed disturbance\\
+\(\beta_p \sim\), The coefficient on antecedent primary P\\
+\(\omega \sim dirichlet(1,1,...,1)\), Simplex coefficient on varying
+intervals of antecedent P\\
+\(\sigma_{proc} \sim\), Process error\\
+\(\sigma_{obs} \sim\), Observation error
+
+\hypertarget{constants}{%
+\paragraph{Constants}\label{constants}}
+
+\(AR_f = 0.44\), The fraction of \(P\) that is respired by autotrophic
+respiration\\
+\(E_a = 0.63 eV\), The activation energy for carbon decay\\
+\(k_b = 8.6173 \cdot 10^{-5} eV/K\), Boltzmann's constant
+
+\end{document}

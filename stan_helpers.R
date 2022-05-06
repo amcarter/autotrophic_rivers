@@ -3,15 +3,32 @@
 
 
 # extracting and summarizing data:
-get_pars <- function(mod, pars){
+get_pars <- function(mod, pars, as_list = FALSE){
     fit <- summary(mod)$summary
     pp <- fit %>%
         as.data.frame()%>%
-        filter(row.names(fit) %in% pars)
+        # filter(substr(row.names(fit), 1, nchar(row.names(fit))))
+        filter(grepl(paste0('^(?:',
+                            paste(pars, collapse = '|'),
+                            ')'),
+                            row.names(fit)))
 
-    return(pp)
+    if(!as_list){  return(pp) }
 
+    w <- pp %>% filter(grepl(']$', row.names(pp)))
+    pp <- pp %>% filter(!grepl(']$', row.names(pp)))
+    w <- c(w[,6])
+
+    pnames <- row.names(pp)
+
+    epars <- as.list(t(pp[,1]))
+    names(epars) <- pnames
+    epars$w <- w
+
+    return(epars)
 }
+
+
 
 calc_pp_ests <- function(mod, dat, sim_func, pars,
                          factors = NULL, return_ests = FALSE){
@@ -41,7 +58,7 @@ calc_pp_ests <- function(mod, dat, sim_func, pars,
     return(sumpp)
 }
 
-calc_pp_ests_SAM <- function(mod, dat, sim_func, pars, ANT, antdays,
+calc_pp_ests_SAM <- function(mod, dat, sim_func, pars, ANT, antdays, C0 = 100,
                          factors = NULL, return_ests = FALSE){
     if(is.null(factors)) factors = rep(1, length(pars))
     jd <- extract(mod, pars = names(pars)) %>%
@@ -49,10 +66,10 @@ calc_pp_ests_SAM <- function(mod, dat, sim_func, pars, ANT, antdays,
     post_preds <- matrix(NA, nrow = nrow(dat), ncol = nrow(jd))
     for(i in 1:nrow(jd)){
         for(j in 1:length(pars)){
-            pars[[j]] = c(pull(jd[i, j]))*factors[j]
+            pars[[j]] = c(pull(jd[i, j]))#*factors[j]
         }
 
-        dd <- sim_func(dat, pars, ANT, antdays)
+        dd <- sim_func(dat, pars, ANT, antdays, C0)
         post_preds[, i] <- dd$R_obs
         if(i%%200 == 0){print(paste0('pps ', i/nrow(jd)*100, '% complete'))}
     }
@@ -106,6 +123,51 @@ plot_pp_interval <- function(obs, pp, ylim = NULL, xrng = NULL){
            inset = c(0, -.05), xpd = NA, bty = 'n', ncol = 3)
 
 }
+
+plot_ER_breakdown <- function(fit, pars, cols = c('#90C590', '#AFDBE4', '#F4B570'),
+                  xrng = NULL, includeGPP = FALSE){
+
+    if(is.null(xrng)) xrng = c(31, nrow(fit))
+
+    fit <- fit %>%
+        slice(xrng[1]:xrng[2]) %>%
+        # filter(date <= xrng[2] && date >= xrng[1]) %>%
+        mutate(HRa = -pars$beta_p * Pant,
+               R1 = AR,
+               R2 = AR + HRa,
+               R3 = R2 + HR)
+    if(includeGPP){
+        yrng <- range(fit$R3, fit$ER, fit$GPP)
+    }else{
+        yrng <- range(fit$R3, fit$ER, fit$R1)
+    }
+
+    yrng = c(yrng[1], yrng[2]+(yrng[2]-yrng[1])*.07)
+    dp <- c(fit$date, rev(fit$date))
+    par(mar = c(5,5,4,2))
+    plot(fit$date, fit$GPP, ylim = yrng, type = 'n',
+         ylab = expression(paste("ER (g"~O[2]~"m"^"-2"~" d"^"-1"*")")),
+         xlab = 'Date', col = 'forestgreen',  cex.axis = 1.2,
+         cex.lab = 1.5)
+    if(includeGPP) lines(fit$date, fit$GPP, col = 'forestgreen')
+
+    polygon(dp, c(fit$R3, rep(0, nrow(fit))),
+            col = cols[3], border = NA)
+    polygon(dp, c(fit$R2, rep(0, nrow(fit))),
+            col = cols[2], border = NA)
+    polygon(dp, c(fit$R1, rep(0, nrow(fit))),
+            col = cols[1], border = NA)
+
+    lines(fit$date, fit$ER, lwd = .5, col = alpha(1, .7))
+    legend('topright', c('Modeled:', 'AR','HR Algal', 'HR Detrital'),
+           x.intersp = .2, # inset = .005,
+           fill = c(NA, cols), bty = 'n', border = NA, ncol = 4,
+           cex = 1.3)
+    legend('topleft', 'Observed Respiration',# inset = .005,
+           col = alpha(1, .7), lty = 1, bty = 'n', cex = 1.3, x.intersp = .2)
+
+}
+
 
 # post pred checks
 plot_ER_ppcheck <- function(mod, ss, figname){

@@ -108,23 +108,25 @@ wbp %>%
 
 To determine the role of past primary productivity $(P)$in driving ecosystem respiration $(R)$, we will model respiration as the sum of three component parts, autotrophic respiration $(AR)$, heterotrophic respiration of algal biomass $(HR_A)$, and heterotrophic respiration of allochthonous carbon $(HR_D)$. Autotrophic respiration here is defined as the respiration by autotrophs and their closely associated heterotrophs and is set as a known fraction of primary productivity (Hall and Beaulieu 2013). We will track allochthonous carbon by modeling a latent detrital carbon pool $(C)$ with the assumption of first order decay of detrital material in this pool. Because we are interested in determining important timescales of ecological memory of productivity, instead of modeling an algal carbon pool (which would not retain information about *when* in the past it was fixed) we will model respiration of algal biomass as a function of different intervals of past primary productivity.
 
-\[R(t) = AR(t) + HR_A(t) + HR_D(t)\]
-\[AR(t) = AR_f \cdot P(t)\]
+\[ER_t = AR_t + HR_{A,t} + HR_{D,t} + \epsilon_{obs,t}\]
+\[AR_t = AR_f \times GPP_t\]
+\[AR_f = 0.44\]
 
 #### Latent Carbon Model:
-\[HR_D(t) = K(t) \cdot C(t)\]
-\[K(t) = K_{20} \cdot e ^ {\frac{E_a}{k_b}(\frac{1}{T(t)} - \frac{1}{293})}\] 
-\[C(t) = (C(t-1)\times(1 - \beta_s S(t)) + HR_D(t-1) + L(t)) \times \epsilon(t)\]
-\[S(t) = (\frac{\tau(t) - \tau_0}{\tau_{max} - tau_0})^2\]
-\[\tau(t) = \gamma_w \cdot r(t) \cdot slope\]
-\[\epsilon(t) \sim logNormal(0, \sigma_{proc})\]
+\[HR_{D,t} = - K_t \times C_t\]
+\[K_t = K_{20} \times e ^ {\frac{E_a}{k_b}(\frac{1}{T_t} - \frac{1}{293})}\] 
+\[C_t = (C_{t-1}\times S_t + HR_{D,t} + litter_t) \times \epsilon_{proc,t}\]
+\[S_t = 1-0.8 \times \left( \frac{\tau(t) - \tau_0}{\tau_{max} - tau_0} \right) ^2\]
+\[\tau_t = \gamma_w \times r_t \times slope\]
+\[\epsilon_{proc,t} \sim logNormal(0, \sigma_{proc})\]
 
 Where allochthonous carbon inputs through litterfall $(L)$ are a fixed seasonal input to the system and the scour of detrital carbon $(S)$ is a function of the shear stress $(\tau)$ calculated using the speficic density of water $(\gamma_w)$, the hydraulic radius $(r)$ and the stream bed slope. 
 
 #### Stochastic Antecedent Model:
 
-\[HR_A(t) = \beta_p \cdot \sum_{j=1}^N P(t-j) * \omega_j\]
-\[0 \leq \omega \leq 1, \sum_j \omega_j = 1\]
+\[HR_{A,t} = \beta_p \cdot \sum_{j=1}^N P_{ant,j}(t) * w_j\]
+\[P_{ant,j}(t) = \sum_{\Delta t \in I_j}\frac{GPP(t-\Delta t)}{N(I_j)}\]
+\[0 \leq w \leq 1, \sum_j w_j = 1\]
 
 #### Observation model:
 

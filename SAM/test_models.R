@@ -55,7 +55,8 @@ het_sites <- filter(dat, trophic_stat == 'hetero', width <50) %>%
 prep_data <- function(dat){
     dd <- dat %>%
         arrange(date) %>%
-        select(sitecode = site_name, long_name, date, DOY, GPP, ER, slope,
+        select(sitecode = site_name, long_name, date, DOY, GPP, ER, ER.upper,
+               ER.lower, slope,
                depth, discharge, Stream_PAR, LAI, temp_C = temp.water) %>%
         complete(date = seq(min(date), max(date), by = 'day'))%>%
         mutate(across(c(-sitecode, -long_name, -date, -DOY),
@@ -702,7 +703,7 @@ C0 = 100       # Initial organic C
 nweights <- 4
 antdays <- 30
 
-simulate_SAMint_detC_logpi_ss <- function(ss, pars, ANT, antdays){
+simulate_SAMint_detC_logpi_ss <- function(ss, pars, ANT, antdays, C0 = 100){
     ss <- ss %>%
         mutate(C = 0.5,
                R = 0.5,HR = 0.5,
@@ -710,13 +711,13 @@ simulate_SAMint_detC_logpi_ss <- function(ss, pars, ANT, antdays){
         select(date, GPP, ER, R_obs, R, HR, light, Q, temp_C, litter, tau, C)
 
     ARf = 0.44 # fraction of autotrophic respiration
-    C0 = 100
+    # C0 = 100
 
     ndays <- nrow(ss) # number of days
-    ss$Pant = ANT %*% pars$w
+    ss$Pant = c(ANT %*% pars$w)
 
-    ss$K = calc_rate_coef(ss$temp_C, K_20 = K_20)
-    ss$disturb = calc_disturbance(ss$tau, tau0)
+    ss$K = calc_rate_coef(ss$temp_C, K_20 = pars$K_20)
+    ss$disturb = calc_disturbance(ss$tau, pars$tau0)
 
     Chat = numeric()
     Chat[1] = C0
@@ -979,32 +980,33 @@ plot_ER_ppcheck_SAM5(mod, sim_clack,
 #clackamas
 ANT <- as.matrix(calc_antecedent_drivers(clack$GPP, 4, 2))
 sim_clack <- simulate_SAMint_detC_logpi_ss(clack, pars, ANT, antdays)
-sim_clack %>% select(date, GPP, Q, R, ER,C, litter )%>%
+sim_clack %>%
+    select(date, GPP, Q, R, ER,C, litter )%>%
     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-stan_dat <- list(ndays = nrow(sim_clack), nweights = nweights, antdays = antdays,
-                 R_obs = sim_clack$ER, P = sim_clack$GPP, C0 = 100,
-                 temp = sim_clack$temp_C, litter = sim_clack$litter,
-                 tau = sim_clack$tau, ANT = ANT)
-mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
-            data = stan_dat,
-            chains = 4,  cores = 4,
-            iter = 2000)
-saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack.rds')
-beep(sound = 8)
 
-# mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack.rds')
+# stan_dat <- list(ndays = nrow(sim_clack), nweights = nweights, antdays = antdays,
+#                  R_obs = sim_clack$ER, P = sim_clack$GPP, C0 = 100,
+#                  temp = sim_clack$temp_C, litter = sim_clack$litter,
+#                  tau = sim_clack$tau, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             iter = 2000)
+# saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack.rds')
+# beep(sound = 8)
+#
+# # mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack.rds')
 # pp <- calc_pp_ests_SAM(mod, clack, pars = pars, ANT = ANT, antdays = antdays,
-#                        sim_func = simulate_detC_SAM5,
-#                        factors = c(.01, 1, 1, .1, 1, 1, 1, 1, 1, 1))
+#                        sim_func = simulate_SAMint_detC_logpi_ss)
 # saveRDS(list(mod = mod, post_preds = pp),
 #         'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_pp.rds')
-# m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_pp.rds')
-# mod <- m$mod
-# pp <- m$post_preds
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
 
 a <- traceplot(mod, ncol = 2, names(pars))
 b <- plot(mod, pars = names(pars))
@@ -1014,70 +1016,177 @@ c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
 png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_clack.png', height = 800, width = 400)
     ggpubr::ggarrange(a, b, ncol = 1)
 dev.off()
-# png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_clack_PPcheck.png')
-#     plot_pp_interval(sim_clack$R_obs, pp, xrng = c(365, 730))#, ylim = c(-3,0.5))
-# dev.off()
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+clack_fit <- simulate_SAMint_detC_logpi_ss(clack, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_clack_fit.png',
+    width = 800, height = 500)
+    plot_ER_breakdown(clack_fit, fit_pars, xrng = c(31, 1445))
+dev.off()
+
+clackant <- as.data.frame(ANT)
+clack_fit$ant1 = clackant[,1]
+clack_fit$ant2 = clackant[,2]
+clack_fit$ant3 = clackant[,3]
+clack_fit$ant4 = clackant[,4]
+clack_fit$LAI = clack$LAI
+clack_fit$discharge = clack$discharge
+dd <- slice(clack_fit, 31: 1445)
+png('figures/GPP.png', width = 600, height = 250)
+    plot(dd$date, dd$GPP, type = 'l', col = 'forestgreen', xlab = 'Date',
+         ylab = expression(paste("GPP (g"~O[2]~"m"^"-2"~" d"^"-1"*")")), lwd = 1.5)
+dev.off()
+png('figures/antGPP.png', width = 600, height = 250)
+    plot(dd$date, dd$GPP, type = 'n', col = 'forestgreen', xlab = 'Date',
+         ylab = "antecedent GPP", lwd = 1.5)
+    lines(dd$date, dd$ant1, col = alpha('lightgreen', .3))
+    lines(dd$date, dd$ant2, col = alpha('forestgreen', .6))
+    lines(dd$date, dd$ant3, col = alpha('forestgreen'))
+    lines(dd$date, dd$ant4)
+    legend('top', c(expression(paste(Delta,'t:')), '-1:2', '-3:6', '-7:14', '-15:30'),
+           col = c(NA, alpha('lightgreen', 0.3), alpha('forestgreen', 0.6),
+                   'forestgreen', 1), lty = c(NA, 1, 1, 1, 1), bty = 'n', ncol = 5)
+dev.off()
+png('figures/litter.png', width = 600, height = 250)
+    plot(dd$date, dd$LAI, type = 'l', xlab = 'Date',
+         ylab = 'LAI', lwd = 1.5, ylim = c(0.9, 3.4))
+    par(new = T)
+    plot(dd$date, dd$litter, pch = 19, col = '#F4B570',
+         xaxt = 'n', yaxt = 'n', xlab = '', ylab = '')
+    legend('topleft', c('LAI', 'litterfall'),
+           col = c(1, '#F4B570'), pch = c(NA, 19), lty = c(1, NA),
+           bty = 'n', ncol = 2, inset = .05)
+
+dev.off()
+png('figures/Q.png', width = 600, height = 250)
+    plot(dd$date, dd$discharge, type = 'l', col = 'steelblue', xlab = 'Date',
+         ylab = expression(paste("Discharge (m"^"3"~" s"^"-1"*")")), lwd = 1.5)
+dev.off()
+png('figures/temp.png', width = 600, height = 250)
+    plot(dd$date, dd$temp_C, type = 'l',xlab = 'Date',
+         ylab = expression(paste("Temperature (",degree,"C)")), lwd = 1.5)
+dev.off()
+png('figures/C.png', width = 600, height = 250)
+    plot(dd$date, dd$C, type = 'l',xlab = 'Date',
+         ylab = expression(paste("Carbon (g m"^"-2"*")")), lwd = 1.5)
+dev.off()
+png('figures/tau.png', width = 600, height = 250)
+    plot(dd$date, dd$discharge, type = 'n', col = 'steelblue', xlab = 'Date',
+         ylab = expression(paste("Discharge (m"^"3"~" s"^"-1"*")")), lwd = 1.5)
+    # polygon(c(dd$date, rev(dd$date)), c(dd$discharge, rep(0, nrow(dd))),
+    #         col = 'lightblue', border = NA)
+    # par(new = T)
+    plot(dd$date, dd$tau, type = 'l',xlab = '', ylab = '',
+         xaxt = 'n', yaxt = 'n', lwd = 1.5)
+         # ylab = expression(paste(tau, " (shear stress, g m"^"-2"*")")))
+    abline(h = 0.95, lty = 2, col = 'brown3')
+    # legend('topleft', c('Q', expression(tau), expression(tau[0])),
+    #        col = c(NA, 1, 'brown3'), fill = c('lightblue', NA, NA), border = NA,
+    #        lty = c(NA, 1,2), bty = 'n', ncol = 3)
+
+dev.off()
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_clack_PPcheck.png')
+    plot_pp_interval(sim_clack$ER, pp, xrng = c(31, nrow(clack)))#, ylim = c(-3,0.5))
+dev.off()
 #
 # plot_ER_ppcheck_SAM5(mod, sim_clack,
 #                 'figures/simulation_fits/rivers/PPcheck_SAM5_detC_logpi_clack.png')
 
 # Pecos
 ANT <- as.matrix(calc_antecedent_drivers(pecos$GPP, 4, 2))
-sim_pecos <- simulate_SAMint_detC_logpi_ss(pecos, pars, ANT, antdays)
+sim_pecos <- simulate_SAMint_detC_logpi_ss(pecos, pars, ANT, antdays, 10)
 sim_pecos %>% select(date, GPP, Q, R, ER,C, litter )%>%
     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-stan_dat <- list(ndays = nrow(sim_pecos), nweights = nweights, antdays = antdays,
-                 R_obs = sim_pecos$ER, P = sim_pecos$GPP, C0 = 100,
-                 temp = sim_pecos$temp_C, litter = sim_pecos$litter,
-                 tau = sim_pecos$tau, ANT = ANT)
-mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
-            data = stan_dat,
-            chains = 4,  cores = 4,
-            iter = 2000)
-saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_pecos.rds')
-beep(sound = 8)
+# stan_dat <- list(ndays = nrow(sim_pecos), nweights = nweights, antdays = antdays,
+#                  R_obs = sim_pecos$ER, P = sim_pecos$GPP, C0 = 10,
+#                  temp = sim_pecos$temp_C, litter = sim_pecos$litter,
+#                  tau = sim_pecos$tau, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             iter = 2000, control = list(max_treedepth = 12))
+# saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_pecos.rds')
+# beep(sound = 8)
+# # mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_pecos.rds')
+# pp <- calc_pp_ests_SAM(mod, pecos, pars = pars, ANT = ANT, antdays = antdays, C0 = 10,
+#                        sim_func = simulate_SAMint_detC_logpi_ss)
+# saveRDS(list(mod = mod, post_preds = pp),
+#         'src/SAM/stan/fits/SAMint_detC_logpi_ss_pecos_pp.rds')
+# m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_pecos_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
 
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_pecos_PPcheck.png')
+    plot_pp_interval(sim_pecos$ER, pp, xrng = c(31, nrow(pecos)))#, ylim = c(-3,0.5))
+dev.off()
 a <- traceplot(mod, ncol = 2, names(pars))
 b <- plot(mod, pars = names(pars))
-c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
-                         'sigma_obs', 'lp__'))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
 
 png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_pecos.png', height = 800, width = 400)
     ggpubr::ggarrange(a, b, ncol = 1)
 dev.off()
 
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+pecos_fit <- simulate_SAMint_detC_logpi_ss(pecos, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_pecos_fit.png',
+    width = 600, height = 400)
+    plot_ER_breakdown(pecos_fit, fit_pars)
+dev.off()
 
 # Grand
 ANT <- as.matrix(calc_antecedent_drivers(grand$GPP, 4, 2))
-sim_grand <- simulate_SAMint_detC_logpi_ss(grand, pars, ANT, antdays)
+sim_grand <- simulate_SAMint_detC_logpi_ss(grand, pars, ANT, antdays, C0 = 10)
 sim_grand %>% select(date, GPP, Q, R, ER,C, litter )%>%
     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
+#
+# stan_dat <- list(ndays = nrow(sim_grand), nweights = nweights, antdays = antdays,
+#                  R_obs = sim_grand$ER, P = sim_grand$GPP, C0 = 10,
+#                  temp = sim_grand$temp_C, litter = sim_grand$litter,
+#                  tau = sim_grand$tau, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             iter = 2000, control = list(max_treedepth = 12))
+# saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_grand.rds')
+# beep(sound = 8)
+#
+# # mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_grand.rds')
+# pp <- calc_pp_ests_SAM(mod, grand, pars = pars, ANT = ANT, antdays = antdays, C0 = 10,
+#                        sim_func = simulate_SAMint_detC_logpi_ss)
+# saveRDS(list(mod = mod, post_preds = pp),
+#         'src/SAM/stan/fits/SAMint_detC_logpi_ss_grand_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_grand_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
 
-stan_dat <- list(ndays = nrow(sim_grand), nweights = nweights, antdays = antdays,
-                 R_obs = sim_grand$ER, P = sim_grand$GPP, C0 = 100,
-                 temp = sim_grand$temp_C, litter = sim_grand$litter,
-                 tau = sim_grand$tau, ANT = ANT)
-mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
-            data = stan_dat,
-            chains = 4,  cores = 4,
-            iter = 2000)
-saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_grand.rds')
-beep(sound = 8)
-
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_grand_PPcheck.png')
+    plot_pp_interval(sim_grand$ER, pp, xrng = c(31, nrow(grand)))#, ylim = c(-3,0.5))
+dev.off()
 a <- traceplot(mod, ncol = 2, names(pars))
 b <- plot(mod, pars = names(pars))
-c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
-                         'sigma_obs', 'lp__'))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
 
 png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_grand.png', height = 800, width = 400)
     ggpubr::ggarrange(a, b, ncol = 1)
+dev.off()
+
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+grand_fit <- simulate_SAMint_detC_logpi_ss(grand, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_grand_fit.png',
+    width = 800, height = 600)
+plot_ER_breakdown(grand_fit, fit_pars)
 dev.off()
 
 # Fanno
@@ -1088,25 +1197,43 @@ sim_fanno %>% select(date, GPP, Q, R, ER,C, litter )%>%
     ggplot(aes(date, value, col = var)) +
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
+#
+# stan_dat <- list(ndays = nrow(sim_fanno), nweights = nweights, antdays = antdays,
+#                  R_obs = sim_fanno$ER, P = sim_fanno$GPP, C0 = 100,
+#                  temp = sim_fanno$temp_C, litter = sim_fanno$litter,
+#                  tau = sim_fanno$tau, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             iter = 2000, control = list(max_treedepth = 12))
+# saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_fanno.rds')
+# beep(sound = 8)
+# mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_fanno.rds')
+# pp <- calc_pp_ests_SAM(mod, fanno, pars = pars, ANT = ANT, antdays = antdays,
+#                        sim_func = simulate_SAMint_detC_logpi_ss)
+# saveRDS(list(mod = mod, post_preds = pp),
+#         'src/SAM/stan/fits/SAMint_detC_logpi_ss_fanno_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_fanno_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
 
-stan_dat <- list(ndays = nrow(sim_fanno), nweights = nweights, antdays = antdays,
-                 R_obs = sim_fanno$ER, P = sim_fanno$GPP, C0 = 100,
-                 temp = sim_fanno$temp_C, litter = sim_fanno$litter,
-                 tau = sim_fanno$tau, ANT = ANT)
-mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
-            data = stan_dat,
-            chains = 4,  cores = 4,
-            iter = 2000)
-saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_fanno.rds')
-beep(sound = 8)
-
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_fanno_PPcheck.png')
+plot_pp_interval(sim_fanno$R_obs, pp, xrng = c(365, 730))#, ylim = c(-3,0.5))
+dev.off()
 a <- traceplot(mod, ncol = 2, names(pars))
 b <- plot(mod, pars = names(pars))
-c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
-                         'sigma_obs', 'lp__'))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
 
 png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_fanno.png', height = 800, width = 400)
     ggpubr::ggarrange(a, b, ncol = 1)
+dev.off()
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+fanno_fit <- simulate_SAMint_detC_logpi_ss(fanno, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_fanno_fit.png',
+    width = 600, height = 400)
+plot_ER_breakdown(fanno_fit, fit_pars)
 dev.off()
 
 # East
@@ -1118,24 +1245,42 @@ sim_east %>% select(date, GPP, Q, R, ER,C, litter )%>%
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
-stan_dat <- list(ndays = nrow(sim_east), nweights = nweights, antdays = antdays,
-                 R_obs = sim_east$ER, P = sim_east$GPP, C0 = 100,
-                 temp = sim_east$temp_C, litter = sim_east$litter,
-                 tau = sim_east$tau, ANT = ANT)
-mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
-            data = stan_dat,
-            chains = 4,  cores = 4,
-            iter = 2000)
-saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_east.rds')
-beep(sound = 8)
+# stan_dat <- list(ndays = nrow(sim_east), nweights = nweights, antdays = antdays,
+#                  R_obs = sim_east$ER, P = sim_east$GPP, C0 = 100,
+#                  temp = sim_east$temp_C, litter = sim_east$litter,
+#                  tau = sim_east$tau, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             iter = 2000, control = list(max_treedepth = 12))
+# saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_east.rds')
+# beep(sound = 8)
+# mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_east.rds')
+# pp <- calc_pp_ests_SAM(mod, east, pars = pars, ANT = ANT, antdays = antdays,
+#                        sim_func = simulate_SAMint_detC_logpi_ss)
+# saveRDS(list(mod = mod, post_preds = pp),
+#         'src/SAM/stan/fits/SAMint_detC_logpi_ss_east_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_east_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
 
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_east_PPcheck.png')
+plot_pp_interval(sim_east$ER, pp, xrng = c(732, 1462))#, ylim = c(-3,0.5))
+dev.off()
 a <- traceplot(mod, ncol = 2, names(pars))
 b <- plot(mod, pars = names(pars))
-c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
-                         'sigma_obs', 'lp__'))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
 
 png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_east.png', height = 800, width = 400)
     ggpubr::ggarrange(a, b,ncol = 1)
+dev.off()
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+east_fit <- simulate_SAMint_detC_logpi_ss(east, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_east_fit.png',
+    width = 800, height = 600)
+plot_ER_breakdown(east_fit, fit_pars, xrng = c(732, 1462))
 dev.off()
 
 # newR
@@ -1147,22 +1292,343 @@ sim_new %>% select(date, GPP, Q, R, ER,C, litter )%>%
     geom_line()+
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 
+# stan_dat <- list(ndays = nrow(sim_new), nweights = nweights, antdays = antdays,
+#                  R_obs = sim_new$ER, P = sim_new$GPP, C0 = 100,
+#                  temp = sim_new$temp_C, litter = sim_new$litter,
+#                  tau = sim_new$tau, ANT = ANT)
+# mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+#             data = stan_dat,
+#             chains = 4,  cores = 4,
+#             iter = 2000, control = list(max_treedepth = 12))
+# saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_new.rds')
+# beep(sound = 8)
+# mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_new.rds')
+# pp <- calc_pp_ests_SAM(mod, newR, pars = pars, ANT = ANT, antdays = antdays,
+#                        sim_func = simulate_SAMint_detC_logpi_ss)
+# saveRDS(list(mod = mod, post_preds = pp),
+#         'src/SAM/stan/fits/SAMint_detC_logpi_ss_new_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_new_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_new_PPcheck.png')
+    plot_pp_interval(sim_new$ER, pp, xrng = c(31, nrow(newR)))#, ylim = c(-3,0.5))
+dev.off()
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_new.png', height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
+dev.off()
+
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+new_fit <- simulate_SAMint_detC_logpi_ss(newR, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_new_fit.png',
+    width = 800, height = 600)
+    plot_ER_breakdown(new_fit, fit_pars)
+dev.off()
+
+
+# Run with fixed Obs error####
+#clackamas
+ANT <- as.matrix(calc_antecedent_drivers(clack$GPP, 4, 2))
+obs_error = median(-clack$ER.lower + clack$ER.upper)/4
+obs_error_sd = sd(-clack$ER.lower + clack$ER.upper)/4
+sim_clack <- simulate_SAMint_detC_logpi_ss(clack, pars, ANT, antdays)
+sim_clack %>% select(date, GPP, Q, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
+stan_dat <- list(ndays = nrow(sim_clack), nweights = nweights, antdays = antdays,
+                 R_obs = sim_clack$ER, P = sim_clack$GPP, C0 = 100,
+                 temp = sim_clack$temp_C, litter = sim_clack$litter,
+                 tau = sim_clack$tau, ANT = ANT, sigma_obs_prior = obs_error,
+                 sigma_obs_sd = obs_error_sd)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_fixedoi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000, control = list(max_treedepth = 12))
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_clack.rds')
+beep(sound = 8)
+
+mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_clack.rds')
+pp <- calc_pp_ests_SAM(mod, clack, pars = pars, ANT = ANT, antdays = antdays,
+                       sim_func = simulate_SAMint_detC_logpi_ss)
+saveRDS(list(mod = mod, post_preds = pp),
+        'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_clack_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_clack_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
+
+a <- traceplot(mod, ncol = 2, pars = names(pars))#c('K_20', 'tau0', 'beta_p', 'sigma_proc','w') )
+b <- plot(mod,  pars = names(pars))#c('K_20', 'tau0', 'beta_p', 'sigma_proc','w') )
+c <- pairs(mod, pars = names(pars))#c('K_20', 'tau0', 'beta_p', 'sigma_proc','lp__'))
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_clack.png',
+    height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
+dev.off()
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_clack_PPcheck.png')
+    plot_pp_interval(sim_clack$R_obs, pp, xrng = c(365, 730))#, ylim = c(-3,0.5))
+dev.off()
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+clack_fit <- simulate_SAMint_detC_logpi_ss(clack, fit_pars, ANT, antdays)
+
+plot_ER_breakdown(clack_fit, pars)
+
+#
+# plot_ER_ppcheck_SAM5(mod, sim_clack,
+#                 'figures/simulation_fits/rivers/PPcheck_SAM5_detC_logpi_clack.png')
+
+# Pecos
+ANT <- as.matrix(calc_antecedent_drivers(pecos$GPP, 4, 2))
+sim_pecos <- simulate_SAMint_detC_logpi_ss(pecos, pars, ANT, antdays)
+obs_error = median(-pecos$ER.lower + pecos$ER.upper)/4
+obs_error_sd = sd(-pecos$ER.lower + pecos$ER.upper)/4
+
+# sim_pecos %>% select(date, GPP, disturb, R, ER,C, litter )%>%
+#     pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+#     ggplot(aes(date, value, col = var)) +
+#     geom_line()+
+#     facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
+stan_dat <- list(ndays = nrow(sim_pecos), nweights = nweights, antdays = antdays,
+                 R_obs = sim_pecos$ER, P = sim_pecos$GPP, C0 = 100,
+                 temp = sim_pecos$temp_C, litter = sim_pecos$litter,
+                 tau = sim_pecos$tau, ANT = ANT, sigma_obs_prior = obs_error,
+                 sigma_obs_sd = obs_error_sd)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_fixedoi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 1000, control = list(max_treedepth = 12))
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_pecos.rds')
+beep(sound = 8)
+pp <- calc_pp_ests_SAM(mod, pecos, pars = pars, ANT = ANT, antdays = antdays,
+                       sim_func = simulate_SAMint_detC_logpi_ss)
+saveRDS(list(mod = mod, post_preds = pp),
+        'src/SAM/stan/fits/SAMint_detC_logpi_ss_pecos_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_pecos_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_pecos_PPcheck.png')
+    plot_pp_interval(sim_pecos$ER, pp)#, xrng = c(365, 730))#, ylim = c(-3,0.5))
+dev.off()
+
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_pecos.png',
+    height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
+dev.off()
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+pecos_fit <- simulate_SAMint_detC_logpi_ss(pecos, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_pecos_fit.png',
+    width = 600, height = 400)
+    plot_ER_breakdown(pecos_fit, fit_pars)
+dev.off()
+
+# Grand
+ANT <- as.matrix(calc_antecedent_drivers(grand$GPP, 4, 2))
+sim_grand <- simulate_SAMint_detC_logpi_ss(grand, pars, ANT, antdays)
+obs_error = median(-grand$ER.lower + grand$ER.upper)/4
+obs_error_sd = sd(-grand$ER.lower + grand$ER.upper)/4
+
+sim_grand %>% select(date, GPP, Q, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
+stan_dat <- list(ndays = nrow(sim_grand), nweights = nweights, antdays = antdays,
+                 R_obs = sim_grand$ER, P = sim_grand$GPP, C0 = 100,
+                 temp = sim_grand$temp_C, litter = sim_grand$litter,
+                 tau = sim_grand$tau, ANT = ANT, sigma_obs_prior = obs_error,
+                 sigma_obs_sd = obs_error_sd)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_fixedoi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000, control = list(max_treedepth = 12))
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_grand.rds')
+beep(sound = 8)
+
+pp <- calc_pp_ests_SAM(mod, grand, pars = pars, ANT = ANT, antdays = antdays,
+                       sim_func = simulate_SAMint_detC_logpi_ss)
+saveRDS(list(mod = mod, post_preds = pp),
+        'src/SAM/stan/fits/SAMint_detC_logpi_fixedio_ss_grand_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_fixedio_ss_grand_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_grand_PPcheck.png')
+    plot_pp_interval(sim_grand$ER, pp)#, xrng = c(365, 730))#, ylim = c(-3,0.5))
+dev.off()
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_grand.png',
+    height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
+dev.off()
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+grand_fit <- simulate_SAMint_detC_logpi_ss(grand, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_grand_fit.png',
+    width = 600, height = 400)
+plot_ER_breakdown(grand_fit, fit_pars)
+dev.off()
+
+# Fanno
+ANT <- as.matrix(calc_antecedent_drivers(fanno$GPP, 4, 2))
+sim_fanno <- simulate_SAMint_detC_logpi_ss(fanno, pars, ANT, antdays)
+obs_error = median(-fanno$ER.lower + fanno$ER.upper)/4
+obs_error_sd = sd(-fanno$ER.lower + fanno$ER.upper)/4
+
+sim_fanno %>% select(date, GPP, Q, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
+stan_dat <- list(ndays = nrow(sim_fanno), nweights = nweights, antdays = antdays,
+                 R_obs = sim_fanno$ER, P = sim_fanno$GPP, C0 = 100,
+                 temp = sim_fanno$temp_C, litter = sim_fanno$litter,
+                 tau = sim_fanno$tau, ANT = ANT, sigma_obs_prior = obs_error,
+                 sigma_obs_sd = obs_error_sd)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_fixedoi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 1000, control = list(max_treedepth = 12))
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_fanno.rds')
+mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_fanno.rds')
+beep(sound = 8)
+
+pp <- calc_pp_ests_SAM(mod, fanno, pars = pars, ANT = ANT, antdays = antdays,
+                       sim_func = simulate_SAMint_detC_logpi_ss)
+saveRDS(list(mod = mod, post_preds = pp),
+        'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_fanno_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_fanno_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_fanno_PPcheck.png')
+    plot_pp_interval(sim_fanno$ER, pp)#, xrng = c(365, 730))#, ylim = c(-3,0.5))
+dev.off()
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_fanno.png',
+    height = 800, width = 400)
+    ggpubr::ggarrange(a, b, ncol = 1)
+dev.off()
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+fanno_fit <- simulate_SAMint_detC_logpi_ss(fanno, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_fanno_fit.png',
+    width = 600, height = 400)
+plot_ER_breakdown(fanno_fit, fit_pars)
+dev.off()
+
+# East
+ANT <- as.matrix(calc_antecedent_drivers(east$GPP, 4, 2))
+sim_east <- simulate_SAMint_detC_logpi_ss(east, pars, ANT, antdays)
+obs_error = median(-east$ER.lower + east$ER.upper)/4
+obs_error_sd = sd(-east$ER.lower + east$ER.upper)/4
+
+sim_east %>% select(date, GPP, Q, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
+stan_dat <- list(ndays = nrow(sim_east), nweights = nweights, antdays = antdays,
+                 R_obs = sim_east$ER, P = sim_east$GPP, C0 = 100,
+                 temp = sim_east$temp_C, litter = sim_east$litter,
+                 tau = sim_east$tau, ANT = ANT, sigma_obs_prior = obs_error,
+                 sigma_obs_sd = obs_error_sd)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_fixedoi_ss.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            iter = 2000, control = list(max_treedepth = 12))
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_east.rds')
+beep(sound = 8)
+pp <- calc_pp_ests_SAM(mod, east, pars = pars, ANT = ANT, antdays = antdays,
+                       sim_func = simulate_SAMint_detC_logpi_ss)
+saveRDS(list(mod = mod, post_preds = pp),
+        'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_east_pp.rds')
+m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_east_pp.rds')
+mod <- m$mod
+pp <- m$post_preds
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_east_PPcheck.png')
+    plot_pp_interval(sim_east$ER, pp)#, xrng = c(365, 730))#, ylim = c(-3,0.5))
+dev.off()
+a <- traceplot(mod, ncol = 2, names(pars))
+b <- plot(mod, pars = names(pars))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
+
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_east.png',
+    height = 800, width = 400)
+    ggpubr::ggarrange(a, b,ncol = 1)
+dev.off()
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+east_fit <- simulate_SAMint_detC_logpi_ss(east, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_east_fit.png',
+    width = 600, height = 400)
+plot_ER_breakdown(east_fit, fit_pars)
+dev.off()
+
+# newR
+ANT <- as.matrix(calc_antecedent_drivers(newR$GPP, 4, 2))
+sim_new <- simulate_SAMint_detC_logpi_ss(newR, pars, ANT, antdays)
+obs_error = median(-newR$ER.lower + newR$ER.upper)/4
+obs_error_sd = sd(-newR$ER.lower + newR$ER.upper)/4
+sim_new %>% select(date, GPP, Q, R, ER,C, litter )%>%
+    pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+    ggplot(aes(date, value, col = var)) +
+    geom_line()+
+    facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
 stan_dat <- list(ndays = nrow(sim_new), nweights = nweights, antdays = antdays,
                  R_obs = sim_new$ER, P = sim_new$GPP, C0 = 100,
                  temp = sim_new$temp_C, litter = sim_new$litter,
-                 tau = sim_new$tau, ANT = ANT)
-mod <- stan('src/SAM/stan/SAMint_detC_logpi_ss.stan',
+                 tau = sim_new$tau, ANT = ANT, sigma_obs_prior = obs_error,
+                 sigma_obs_sd = obs_error_sd)
+mod <- stan('src/SAM/stan/SAMint_detC_logpi_fixedoi_ss.stan',
             data = stan_dat,
             chains = 4,  cores = 4,
-            iter = 2000)
-saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_new.rds')
+            iter = 2000, control = list(max_treedepth = 12))
+saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_new.rds')
+mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_fixedoi_ss_new.rds')
 beep(sound = 8)
 
 a <- traceplot(mod, ncol = 2, names(pars))
 b <- plot(mod, pars = names(pars))
-c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
-                         'sigma_obs', 'lp__'))
+# c <- pairs(mod, pars = c('K_20', 'tau0', 'beta_p', 'sigma_proc',
+#                          'sigma_obs', 'lp__'))
 
-png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_new.png', height = 800, width = 400)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_new.png',
+    height = 800, width = 400)
     ggpubr::ggarrange(a, b, ncol = 1)
+dev.off()
+
+
+fit_pars <- get_pars(mod, names(pars), as_list = T)
+new_fit <- simulate_SAMint_detC_logpi_ss(newR, fit_pars, ANT, antdays)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_fixedoi_ss_new_fit.png',
+    width = 600, height = 400)
+plot_ER_breakdown(new_fit, fit_pars)
 dev.off()
