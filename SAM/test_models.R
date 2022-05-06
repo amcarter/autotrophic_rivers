@@ -804,16 +804,17 @@ beep(sound = 8)
 saveRDS(mod, 'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_sim.rds')
 
 # mod <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_sim.rds')
-pp <- calc_pp_ests(mod, clack, pars= pars,
-                   sim_func = simulate_detC_logpi_ss)
+pp <- calc_pp_ests_SAM(mod, clack, pars= pars, ANT = ANT, antdays = antdays,
+                   sim_func = simulate_SAMint_detC_logpi_ss)
 
 saveRDS(list(mod = mod, post_preds = pp),
         'src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_sim_pp.rds')
 m <- readRDS('src/SAM/stan/fits/SAMint_detC_logpi_ss_clack_sim_pp.rds')
 mod <- m$mod
 pp <- m$post_preds
-png('figures/simulation_fits/PPcheck_SAMint_detC_logpi_ss_clackiver_sim.png')
-    plot_pp_interval(sim_clack$R_obs, pp)#, ylim = c(-30,0))
+png('figures/simulation_fits/PPcheck_SAMint_detC_logpi_ss_clackiver_sim.png',
+    width = 400, height = 350)
+    plot_pp_interval(sim_clack$R_obs, pp, xrng = c(31, 396))#, ylim = c(-30,0))
 dev.off()
 
 print(mod, pars)
@@ -1019,8 +1020,8 @@ dev.off()
 
 fit_pars <- get_pars(mod, names(pars), as_list = T)
 clack_fit <- simulate_SAMint_detC_logpi_ss(clack, fit_pars, ANT, antdays)
-png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_clack_fit.png',
-    width = 800, height = 500)
+png('figures/simulation_fits/rivers/SAMint_detC_logpi_ss_clack_fit2.png',
+    width = 700, height = 500)
     plot_ER_breakdown(clack_fit, fit_pars, xrng = c(31, 1445))
 dev.off()
 
@@ -1032,57 +1033,67 @@ clack_fit$ant4 = clackant[,4]
 clack_fit$LAI = clack$LAI
 clack_fit$discharge = clack$discharge
 dd <- slice(clack_fit, 31: 1445)
-png('figures/GPP.png', width = 600, height = 250)
+png('figures/GPP.png', width = 650, height = 250)
+    par(mar = c(5, 5, 0, 1))
     plot(dd$date, dd$GPP, type = 'l', col = 'forestgreen', xlab = 'Date',
          ylab = expression(paste("GPP (g"~O[2]~"m"^"-2"~" d"^"-1"*")")), lwd = 1.5)
 dev.off()
-png('figures/antGPP.png', width = 600, height = 250)
+png('figures/antGPP.png',  width = 650, height = 250)
+par(mar = c(5, 5, 0, 1))
     plot(dd$date, dd$GPP, type = 'n', col = 'forestgreen', xlab = 'Date',
          ylab = "antecedent GPP", lwd = 1.5)
-    lines(dd$date, dd$ant1, col = alpha('lightgreen', .3))
-    lines(dd$date, dd$ant2, col = alpha('forestgreen', .6))
+    lines(dd$date, dd$ant1, col = alpha('goldenrod'))
+    lines(dd$date, dd$ant2, col = alpha('forestgreen', .5))
     lines(dd$date, dd$ant3, col = alpha('forestgreen'))
     lines(dd$date, dd$ant4)
-    legend('top', c(expression(paste(Delta,'t:')), '-1:2', '-3:6', '-7:14', '-15:30'),
-           col = c(NA, alpha('lightgreen', 0.3), alpha('forestgreen', 0.6),
+    legend('top', c(expression(paste(Delta,'t:')), '1-2 days', '3-6 days',
+                    '7-14 days', '15-30 days'), cex = 1.1,
+           col = c(NA, alpha('goldenrod'), alpha('forestgreen', 0.5),
                    'forestgreen', 1), lty = c(NA, 1, 1, 1, 1), bty = 'n', ncol = 5)
 dev.off()
-png('figures/litter.png', width = 600, height = 250)
+png('figures/litter.png',  width = 650, height = 250)
+par(mar = c(5, 5, 0, 1))
     plot(dd$date, dd$LAI, type = 'l', xlab = 'Date',
          ylab = 'LAI', lwd = 1.5, ylim = c(0.9, 3.4))
     par(new = T)
     plot(dd$date, dd$litter, pch = 19, col = '#F4B570',
          xaxt = 'n', yaxt = 'n', xlab = '', ylab = '')
-    legend('topleft', c('LAI', 'litterfall'),
+    legend('topleft', c('LAI', 'litterfall'), cex = 1.1,
            col = c(1, '#F4B570'), pch = c(NA, 19), lty = c(1, NA),
            bty = 'n', ncol = 2, inset = .05)
 
 dev.off()
-png('figures/Q.png', width = 600, height = 250)
+png('figures/Q.png', width = 650, height = 250)
+par(mar = c(5, 5, 0, 1))
     plot(dd$date, dd$discharge, type = 'l', col = 'steelblue', xlab = 'Date',
          ylab = expression(paste("Discharge (m"^"3"~" s"^"-1"*")")), lwd = 1.5)
 dev.off()
-png('figures/temp.png', width = 600, height = 250)
+png('figures/temp.png',  width = 650, height = 250)
+par(mar = c(5, 5, 0, 1))
     plot(dd$date, dd$temp_C, type = 'l',xlab = 'Date',
          ylab = expression(paste("Temperature (",degree,"C)")), lwd = 1.5)
 dev.off()
-png('figures/C.png', width = 600, height = 250)
+png('figures/C.png',  width = 650, height = 250)
+par(mar = c(5, 5, 0, 1))
     plot(dd$date, dd$C, type = 'l',xlab = 'Date',
          ylab = expression(paste("Carbon (g m"^"-2"*")")), lwd = 1.5)
+    legend('topleft', 'Latent State: \nCarbon Storage', inset = .05, bty = 'n')
 dev.off()
-png('figures/tau.png', width = 600, height = 250)
-    plot(dd$date, dd$discharge, type = 'n', col = 'steelblue', xlab = 'Date',
-         ylab = expression(paste("Discharge (m"^"3"~" s"^"-1"*")")), lwd = 1.5)
+png('figures/tau.png',  width = 650, height = 250)
+par(mar = c(5, 5, 0, 1))
+    # plot(dd$date, dd$discharge, type = 'n', col = 'steelblue', xlab = 'Date',
+    #      ylab = expression(paste("Discharge (m"^"3"~" s"^"-1"*")")), lwd = 1.5)
     # polygon(c(dd$date, rev(dd$date)), c(dd$discharge, rep(0, nrow(dd))),
     #         col = 'lightblue', border = NA)
     # par(new = T)
-    plot(dd$date, dd$tau, type = 'l',xlab = '', ylab = '',
-         xaxt = 'n', yaxt = 'n', lwd = 1.5)
+    plot(dd$date, dd$tau, type = 'l',xlab = 'Date',
+         ylab = expression(paste(tau, ' (shear stress)')),
+         lwd = 1.5)
          # ylab = expression(paste(tau, " (shear stress, g m"^"-2"*")")))
-    abline(h = 0.95, lty = 2, col = 'brown3')
-    # legend('topleft', c('Q', expression(tau), expression(tau[0])),
-    #        col = c(NA, 1, 'brown3'), fill = c('lightblue', NA, NA), border = NA,
-    #        lty = c(NA, 1,2), bty = 'n', ncol = 3)
+    abline(h = 0.7, lty = 2, col = 'brown3')
+    legend('topright', c(expression(tau), expression(tau[0])),
+           col = c(1, 'brown3'), fill = c(NA, NA), border = NA,
+           lty = c(1,2), bty = 'n', ncol = 3, cex = 1.1)
 
 dev.off()
 

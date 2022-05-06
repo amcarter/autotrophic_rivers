@@ -115,14 +115,21 @@ plot_pp_interval <- function(obs, pp, ylim = NULL, xrng = NULL){
     plot(pp$date, pp$q_50, type = 'l', ylim = ylim,
          xlab = 'Date', ylab = 'Respiration',)
     polygon(c(pp$date, rev(pp$date)), c(pp$q_2.5, rev(pp$q_97.5)),
-            col = alpha('grey', .5), border = NA, xpd = TRUE)
+            col = alpha('grey', .8), border = NA, xpd = TRUE)
+    lines(pp$date, pp$q_50)
     lines(pp$date, pp$obs, col = '#F8766D')
-    legend('topleft', c('observed', 'modeled', '95% PPI'),
-           col = c('#F8766D', 1, NA), fill = c(NA, NA, alpha('grey', 0.5)),
-           lty = c(1,1,NA), border = NA,
-           inset = c(0, -.05), xpd = NA, bty = 'n', ncol = 3)
+    legend('bottomright', c('simulated', 'modeled', '95% PPI'),
+           col = c('#F8766D', 1, NA), fill = c(NA, NA, alpha('grey', .8)),
+           lty = c(1,1,NA), border = NA, inset = .05,
+           xpd = NA, bty = 'n', ncol = 1)
 
 }
+
+png('figures/simulation_fits/PPcheck_SAMint_detC_logpi_ss_clackiver_sim.png',
+    width = 350, height = 350)
+plot_pp_interval(sim_clack$R_obs, pp, xrng = c(31, 396))#, ylim = c(-30,0))
+dev.off()
+
 
 plot_ER_breakdown <- function(fit, pars, cols = c('#90C590', '#AFDBE4', '#F4B570'),
                   xrng = NULL, includeGPP = FALSE){
@@ -145,6 +152,7 @@ plot_ER_breakdown <- function(fit, pars, cols = c('#90C590', '#AFDBE4', '#F4B570
     yrng = c(yrng[1], yrng[2]+(yrng[2]-yrng[1])*.07)
     dp <- c(fit$date, rev(fit$date))
     par(mar = c(5,5,4,2))
+
     plot(fit$date, fit$GPP, ylim = yrng, type = 'n',
          ylab = expression(paste("ER (g"~O[2]~"m"^"-2"~" d"^"-1"*")")),
          xlab = 'Date', col = 'forestgreen',  cex.axis = 1.2,
