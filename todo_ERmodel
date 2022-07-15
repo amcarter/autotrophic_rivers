@@ -1,0 +1,21 @@
+To do for ER model
+
+ORGANIZE
+        X rake todo list
+        X gather notes from Bob convo
+-organize autotrophy repo to have models accessible
+-maybe start a new repo just for the metabolism model?
+
+MODEL CODE
+-add a GPP model fit
+-test different implementations of process error
+-add pooling based on slope
+
+HINDCAST
+-get hindcasting code together and in the 50yl repo
+
+FIGURES
+-ACF watershed change plots to make sure it's chill to do regression
+-Fit a GAM to look at seasonal change with error bars for then and now
+    this plot could include points for data, eliminating need for seasonal cov plot?
+-add dotted lines for hindcast

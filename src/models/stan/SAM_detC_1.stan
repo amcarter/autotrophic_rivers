@@ -32,6 +32,7 @@ transformed data {
   real E_a;  // activation energy for carbon decay (eV)
   real k_b;  // boltzmann's constant in eV/K
   real K_20;          // decay rate at 20C (1/day)
+  vector<lower=0>[ndays] K;       // decay rate per day
 
   AR_f = 0.44;
   E_a = 0.63;
@@ -45,6 +46,7 @@ transformed data {
   }
   tau_max = max(tau);
   tau_prior = sort_asc(tau)[ndays/2];
+  K = K_20 * exp((E_a/k_b)*(1.0./temp_K - 1.0/293.0));
 }
 
 parameters {
@@ -61,7 +63,6 @@ parameters {
 transformed parameters {
   vector<lower=0>[ndays] Pant;    // antecedent productivity
   vector<lower=0>[ndays] ss_ratio;// squared ratio of shear stress in loss term
-  vector<lower=0>[ndays] K;       // decay rate per day
 
   Pant[1:nweights] = P[1:nweights];
 
@@ -81,7 +82,6 @@ transformed parameters {
     }
   }
 
-  K = K_20 * exp((E_a/k_b)*(1.0./temp_K - 1.0/293.0));
 
 }
 
@@ -92,8 +92,8 @@ model {
   vector[ndays] C_hat;// Carbon before process error
 
   // process model
-  C[1] ~ lognormal(log(C0), sigma_proc);
-  C_hat[1] = C[1];
+  C_hat[1] = C0;
+  C[1] ~ lognormal(log(C_hat[1]), sigma_proc);
   HR_d[1] = -K[1] * C[1];
   HR_p = -beta_p * Pant;
   print("C0 = ", C0, "C_hat = ", C_hat[1], " beta_s = ", beta_s, " ss = ", ss_ratio[1], " K20 = ", K_20, K[1]);

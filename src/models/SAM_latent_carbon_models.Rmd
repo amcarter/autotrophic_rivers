@@ -1,0 +1,1454 @@
+---
+title: "ER model detrital C antecedent GPP"
+author: "Alice Carter"
+date: "4/1/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = 'C:/Users/alice.carter/git/autotrophic_rivers/src/')
+setwd('C:/Users/alice.carter/git/autotrophic_rivers/src/')
+library(tidyverse)
+library(rstan)
+library(lubridate)
+library(beepr)
+source('stan_helpers.R')
+source('SAM/simulate/simulation_functions.R')
+```
+
+### Stochastic antecedent model of Ecosystem Respiration with carbon modeled as a latent state.
+#### Background  
+The breakdown of organic carbon is a fundamental energetic process in rivers. It is important and relevant becasuse...
+
+Some of the carbon that is respired comes from terrestrial subsidies, but in some rivers, autotrophy can play a dominant role in supplying foodchains and energetic cycles, etc (Marcarelli2011, Minshall1987).
+
+Previous studies have estimated that about half of the carbon fixed by autotrophs is respired rapidly either by the autotrophic organisms themselves or by closely associated heterotrophs (Hall and Beaulieu 2013) but those estimates range widely across rivers (Genzoli and Hall 2016, others). However, we do not know when that respiration is happening. Is it occuring within the same day that the carbon is fixed or several days later?
+
+Questions:  
+1. Is memory of past fluxes of primary productivity retained in fluxes of ecosystem respiration?
+2. When is autochthonous material respired relative to when it is fixed?  
+3. Does incorporating ecological memory into our understanding of how GPP influences ER change our estimate of autotrophic respiration?  
+4. What characteristics of streams determine the degree to which there is ecological memory in stream respiration?  
+5. In systems where we do observe memory of past GPP in ER fluxes, is there a seasonality to these dynamics? Does higher GPP lead to stronger ecological memory?  
+
+Hypotheses:  
+Rivers with higher fluxes of primary productivity will derive a greater portion of their respiration from autochthonous production, resulting in a possibility for ecological memory of productivity in respiration fluxes. Community dynamics will determine the likelihood of a time lag with phytoplankton dominated communities deriving most of their respiration from that days productivity and benthic, macrophyte dominated comunities demonstrating time lags in the response of ER to GPP. Within these rivers, there will be strong seasonality to ecological memory linked to the growing season of the primary producers.
+With components based on Ogle et al 2015 and Segatto et al 2021
+
+### Data
+
+Read in some data from a set of autotrophic rivers to use as drivers for simulations
+
+```{r}
+dat <- read_csv('../data/data_working/high_quality_daily_met.csv')
+
+ss <- dat %>%
+  # filter(site_name == 'nwis_') %>%
+    filter(long_name == "CLACKAMAS RIVER NEAR OREGON CITY, OR") %>%
+  # ggplot(aes(date, GPP)) + geom_line()
+  arrange(date) %>%
+  select(sitecode = site_name, long_name, date, DOY, GPP, ER, 
+         depth, discharge, DO_mgL= DO.obs, light = PAR_sum,LAI = LAI_proc,
+         temp_C = temp.water) %>%
+  mutate(across(c(-sitecode, -long_name, -date, -DOY), zoo::na.approx, na.rm = F),
+         # tau_mgm2 = 10^3 * depth * slope,
+         light = light/max(light))
+ss$litter <- calc_litter_from_LAI(ss)
+
+auto <- ss[366:730,]
+
+auto %>%
+  select(date, temp = temp_C, discharge, GPP, ER, LAI, litter) %>%
+  pivot_longer(-date, names_to = 'variable', values_to = 'value') %>%
+  ggplot(aes(date, value, col = variable)) +
+  geom_line() +
+  facet_wrap(.~variable, nrow = 4, scales = 'free_y')
+
+```
+
+
+Read in data from a heterotrophic system:
+```{r}
+slope <- read_csv('C:/Users/alice.carter/git/nhc_50yl/data/siteData/NHCsite_metadata.csv') %>% 
+    select(site = sitecode, slope = slope_wbx, width = width_mar_m)
+dat <- read_csv('C:/Users/alice.carter/git/nhc_50yl/data/metabolism/metabolism_and_drivers.csv') %>%
+    left_join(slope, by = 'site')
+# define litterfall to be 20 days from Oct 5th - 24th with the total annual litter = 500 gC/m2/y, so daily litterfall = 25 gC/m2/d
+wbp_miss <- dat %>%
+  filter(site == 'WBP') %>%
+  arrange(date) %>%
+  mutate(ER = case_when(discharge > 10 ~ NA_real_, TRUE ~ ER),
+         GPP = case_when(discharge > 10 ~ NA_real_, TRUE ~ GPP)) %>%
+  mutate(across(c(-date, -ER, -site), zoo::na.approx, na.rm = F),
+         logQ = log(discharge),
+         tau_mgm2 = 10^3 * depth * slope,
+         temp_C = temp.water,
+         light = PAR_surface/max(PAR_surface),
+         Q = discharge/max(discharge)) %>%
+  slice(-1) %>%
+  filter(!is.na(GPP))
+wbp_miss$litter = calc_litter_from_LAI(wbp_miss)
+
+wbp <- mutate(wbp_miss, ER = zoo::na.approx(ER), na.rm = F) %>%
+  filter(!is.na(ER)) %>%
+    group_by(date) %>%
+    summarize(across(-site, mean, na.rm = T))
+
+wbp %>%
+  select(date, temp_C, logQ, light, LAI, litter) %>%
+  pivot_longer(-date, names_to = 'variable', values_to = 'value') %>%
+  ggplot(aes(date, value, col = variable)) +
+  geom_line() +
+  facet_wrap(.~variable, ncol = 1, scales = 'free_y')
+
+```
+
+### Model Equations
+
+To determine the role of past primary productivity $(P)$in driving ecosystem respiration $(R)$, we will model respiration as the sum of three component parts, autotrophic respiration $(AR)$, heterotrophic respiration of algal biomass $(HR_A)$, and heterotrophic respiration of allochthonous carbon $(HR_D)$. Autotrophic respiration here is defined as the respiration by autotrophs and their closely associated heterotrophs and is set as a known fraction of primary productivity (Hall and Beaulieu 2013). We will track allochthonous carbon by modeling a latent detrital carbon pool $(C)$ with the assumption of first order decay of detrital material in this pool. Because we are interested in determining important timescales of ecological memory of productivity, instead of modeling an algal carbon pool (which would not retain information about *when* in the past it was fixed) we will model respiration of algal biomass as a function of different intervals of past primary productivity.
+
+\[ER_t = AR_t + HR_{A,t} + HR_{D,t} + \epsilon_{obs,t}\]
+\[AR_t = AR_f \times GPP_t\]
+\[AR_f = 0.44\]
+
+#### Latent Carbon Model:
+\[HR_{D,t} = - K_t \times C_t\]
+\[K_t = K_{20} \times e ^ {\frac{E_a}{k_b}(\frac{1}{T_t} - \frac{1}{293})}\] 
+\[C_t = (C_{t-1}\times S_t + HR_{D,t} + litter_t) \times \epsilon_{proc,t}\]
+\[S_t = 1-0.8 \times \left( \frac{\tau(t) - \tau_0}{\tau_{max} - tau_0} \right) ^2\]
+\[\tau_t = \gamma_w \times r_t \times slope\]
+\[\epsilon_{proc,t} \sim logNormal(0, \sigma_{proc})\]
+
+Where allochthonous carbon inputs through litterfall $(L)$ are a fixed seasonal input to the system and the scour of detrital carbon $(S)$ is a function of the shear stress $(\tau)$ calculated using the speficic density of water $(\gamma_w)$, the hydraulic radius $(r)$ and the stream bed slope. 
+
+#### Stochastic Antecedent Model:
+
+\[HR_{A,t} = \beta_p \cdot \sum_{j=1}^N P_{ant,j}(t) * w_j\]
+\[P_{ant,j}(t) = \sum_{\Delta t \in I_j}\frac{GPP(t-\Delta t)}{N(I_j)}\]
+\[0 \leq w \leq 1, \sum_j w_j = 1\]
+
+#### Observation model:
+
+\[R_{obs}(t) \sim N(R(t), \sigma_{obs})\]
+
+#### Priors on parameters
+
+\(C_0 \sim \), The initial detrital C in the system
+\(C_t \sim \), Detrital carbon at each timestep  
+\(K_{20} \sim \), The carbon decay rate at 20 C  
+\(\beta_s \sim \), The coefficient on scour as a function of shear stress  
+\(\tau_0 \sim \), The minimum shear stress required for bed disturbance  
+\(\beta_p \sim \), The coefficient on antecedent primary P  
+\(\omega \sim dirichlet(1,1,...,1)\), Simplex coefficient on varying intervals of antecedent P  
+\(\sigma_{proc} \sim\), Process error  
+\(\sigma_{obs} \sim\), Observation error  
+
+
+#### Constants
+
+\(AR_f = 0.44\), The fraction of \(P\) that is respired by autotrophic respiration  
+\(E_a = 0.63 eV\), The activation energy for carbon decay  
+\(k_b = 8.6173 \cdot 10^{-5} eV/K\), Boltzmann's constant
+
+Future version to do list:
+1. incorporate missing data structure
+2. use log R and P
+3. integrate over different antecedent periods for SAM model
+4. Add a model for P
+5. add a loss term for C
+6. add litter as a function of LAI and terrestrial NPP
+7. Compare complete vs partial pooling of C across days 
+  - what about having a prior for C drawn from a distribution centered on $C_{t-1}$
+8. scale all parameters to be ~ 1 (esp proc error and $C_0$)
+
+Next step: test this version on actual data
+
+## Version: detC_logpi_1  
+Contains:  
+- Latent detrital carbon
+- fixed C0
+- log process error
+- linear scour term
+
+### Data Simulation
+
+```{r}
+ss <- wbp %>%
+    mutate(C = 0.5,
+           R = 0.5,
+           R_obs = ER) %>%
+    select(date, P = GPP, ER, R_obs, R, light, Q, temp_C, litter, C)
+           
+
+ndays <- nrow(ss) # number of days
+
+# define parameters
+C0 = 100       # Initial organic C
+K20 = .01        # Heterotrophic respiration at 20 C
+beta_s = 0.8   # Percent removal of organic carbon from max storm
+sigma_proc = .02 # lognormally distributed, so this is a % error
+sigma_obs = 0.08 
+
+# Constants
+E_a = 0.63            # activation energy for heterotrophic respiration
+k_b = 8.6173 * 10^-5  # Boltzmann's constant in eV/K
+ARf = 0.44            # the fraction of GPP respired by autotrophs
+
+ss$K = calc_rate_coef(ss$temp_C, K_20 = K20)
+
+Chat = numeric()
+Chat[1] = C0
+ss$C[1] = exp(rnorm(1, log(C0), sigma_proc))
+ss$AR = -ARf * ss$P 
+ss$R[1] = ss$AR[1] - ss$K[1] * ss$C[1]
+
+for(i in 2:ndays){
+  Chat[i] = (Chat[i-1] + ss$litter[i] + ss$R[i-1] + ss$P[i-1])*
+      (1-beta_s*ss$Q[i])
+  ss$C[i] = exp(rnorm(1, log(Chat[i]), sigma_proc))
+  ss$R[i] = ss$AR[i] - ss$K[i]*ss$C[i]
+}
+
+# observation model:
+ss$R_obs = rnorm(ndays, ss$R, sigma_obs)
+
+ss %>% select(date, P, Q, R, C, litter )%>%
+pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+  ggplot(aes(date, value, col = var)) +
+  geom_line()+
+  facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
+```
+
+### Stan Code
+
+```{r, comment='', echo = FALSE}
+cat(read_lines('SAM/stan/detC_logpi_1.stan'), sep = '\n')
+```
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), R_obs = ss$R_obs, P = ss$P, C0 = 100, 
+                 temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+mod <- stan('SAM/stan/detC_logpi_1.stan', 
+             data = stan_dat, 
+             chains = 4,  cores = 4, 
+             warmup = 500, iter = 1000)
+beep(sound = 8)
+saveRDS(mod, 'SAM/stan/fits/detC_logpi_1_wbp_sim.rds')
+```
+
+### Model Fit
+
+```{r, echo = FALSE}
+mod <- readRDS('SAM/stan/fits/detC_logpi_1_wbp_sim.rds')
+print(mod, pars = c('beta_s', 'sigma_obs', 'sigma_proc', 'K_20'))
+traceplot(mod, ncol = 2, pars = c('beta_s', 'sigma_obs', 'sigma_proc', 'K_20'))
+plot_post_sim(mod, pars = c('beta_s', 'sigma_obs', 'sigma_proc', 'K_20'), 
+              vals = c( beta_s, sigma_obs, sigma_proc*10, K20*100), 
+              xlim = c(0,1.5))
+
+fit <- summary(mod)
+modC <- fit$summary[4:(3+ndays),1] 
+modC_sd <- fit$summary[4:(3+ ndays),3]
+
+plot(ss$date, ss$C, type = 'l', ylab = 'Carbon (g/m2)', xlab = 'Date')
+points(ss$date, modC, col = 'steelblue', pch = 19)
+polygon(c(wbp$date, rev(wbp$date)), c(modC - modC_sd, rev(modC + modC_sd)), 
+        col = alpha('steelblue', 0.3), border = NA)
+legend('topleft', c('underlying state', 'modeled'), 
+       lty = c(1,0), pch = c(NA,19), col = c('black', 'steelblue'), bty = 'n')
+
+```
+
+### Model run on NHC data
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), R_obs = ss$ER, P = ss$P, C0 = 100,
+                 temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+
+wbp_mod <- stan('SAM/stan/detC_logpi_1.stan', 
+                data = stan_dat, init = 0,
+                chains = 4, cores = 4, 
+                warmup = 500, iter = 2000)
+beep(8)
+saveRDS(wbp_mod, 'SAM/stan/fits/detC_logpi_1_wbp.rds')
+```
+
+```{r, echo = FALSE}
+wbp_mod <- readRDS('SAM/stan/fits/detC_logpi_1_wbp.rds')
+print(wbp_mod, pars = c('beta_s', 'sigma_obs', 'sigma_proc'))
+traceplot(wbp_mod, ncol = 1, pars=c('beta_s', 'sigma_obs', 'sigma_proc'))
+
+fit <- summary(wbp_mod)
+
+# posterior predictive check
+# extract parameters
+K20_mean <- fit$summary[4, 1]
+K20_sd <- fit$summary[4, 3]
+beta_s_mean <- fit$summary[1,1]
+beta_s_sd <- fit$summary[1,3]
+sigma_obs_mean = fit$summary[3,1]
+sigma_obs_sd <- fit$summary[3,3]
+sigma_proc_mean <- fit$summary[2,1]
+sigma_proc_sd <- fit$summary[2,3]
+
+# predict data
+ss$K_pred = calc_rate_coef(ss$temp_C, K_20 = K20_mean/100)
+
+Chat = numeric()
+Chat[1] = C0
+ss$C_pred <- ss$R_pred <- NA_real_
+ss$C_pred[1] = exp(rnorm(1, log(C0), sigma_proc_mean/10))
+ss$R_pred[1] = ss$AR[1] - ss$K_pred[1] * ss$C_pred[1]
+
+for(i in 2:ndays){
+  Chat[i] = (Chat[i-1] + ss$litter[i] + ss$R_pred[i-1] + ss$P[i-1])*
+      (1-beta_s_mean*ss$Q[i])
+  ss$C_pred[i] = exp(rnorm(1, log(Chat[i]), sigma_proc_mean/10))
+  ss$R_pred[i] = ss$AR[i] - ss$K_pred[i]*ss$C_pred[i]
+}
+
+# observation model:
+ss$R_mod = rnorm(ndays, ss$R_pred, sigma_obs_mean)
+
+ss$C_modeled <- fit$summary[5:(ndays+4),1]
+
+wbp_ests <- ss %>%
+    select(date, C_modeled, ER_modeled = R_mod, 
+           ER_measured = ER, GPP_measured = P) %>%
+    mutate(GPP_modeled = NA_real_, C_measured = NA_real_)
+wbp_ests%>%
+  pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+               names_sep = '_', values_to = 'value') %>%
+  ggplot(aes(date, value, col = est)) +
+  geom_line() +
+  facet_wrap(.~variable, scales = 'free', ncol = 1)
+
+```
+
+The model is throwing out my prior for process error and using it to create however much carbon it needs to match respiration on any given day. It might help to fit a non-logged obs error? Or maybe using logged GPP and ER?
+
+
+### Model run on clackamas data
+
+```{r echo = F, include = F}
+ss <- auto %>%
+    mutate(light = light/max(light),
+           Q = discharge/max(discharge),
+           C = 0.5,
+           R = 0.5,
+           R_obs = ER) %>%
+    select(date, P = GPP, ER, R_obs, R, light, Q, temp_C, litter, C)
+```
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), R_obs = ss$ER, P = ss$P, C0 = 100,
+                 temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+
+clack_mod <- stan('SAM/stan/detC_logpi_1.stan', 
+                data = stan_dat, init = 0,
+                chains = 4, cores = 4, 
+                warmup = 500, iter = 2000)
+
+saveRDS(clack_mod, 'SAM/stan/fits/detC_logpi_1_clack.rds')
+```
+
+```{r, echo = FALSE}
+clack_mod <- readRDS('SAM/stan/fits/detC_logpi_1_clack.rds')
+print(clack_mod, pars = c('beta_s', 'sigma_obs', 'sigma_proc'))
+traceplot(clack_mod, ncol = 1, pars=c('beta_s', 'sigma_obs', 'sigma_proc'))
+ndays <- nrow(ss)
+fit <- summary(clack_mod)
+# posterior predictive check
+# extract parameters
+K20_mean <- fit$summary[4, 1]
+K20_sd <- fit$summary[4, 3]
+beta_s_mean <- fit$summary[1,1]
+beta_s_sd <- fit$summary[1,3]
+sigma_obs_mean = fit$summary[3,1]
+sigma_obs_sd <- fit$summary[3,3]
+sigma_proc_mean <- fit$summary[2,1]
+sigma_proc_sd <- fit$summary[2,3]
+
+# predict data
+ss$K_pred = calc_rate_coef(ss$temp_C, K_20 = K20_mean/100)
+
+Chat = numeric()
+Chat[1] = C0
+ss$C_pred <- ss$R_pred <- NA_real_
+ss$C_pred[1] = exp(rnorm(1, log(C0), sigma_proc_mean/10))
+ss$AR <- -ss$P * ARf
+ss$R_pred[1] = ss$AR[1] - ss$K_pred[1] * ss$C_pred[1]
+
+for(i in 2:ndays){
+  Chat[i] = (Chat[i-1] + ss$litter[i] + ss$R_pred[i-1] + ss$P[i-1])*
+      (1-beta_s_mean*ss$Q[i])
+  ss$C_pred[i] = exp(rnorm(1, log(Chat[i]), sigma_proc_mean/10))
+  ss$R_pred[i] = ss$AR[i] - ss$K_pred[i]*ss$C_pred[i]
+}
+
+# observation model:
+ss$R_mod = rnorm(ndays, ss$R_pred, sigma_obs_mean)
+
+ss$C_modeled <- fit$summary[5:(ndays+4),1]
+
+clack_ests <- ss %>%
+    select(date, C_modeled, ER_modeled = R_mod, 
+           ER_measured = ER, GPP_measured = P) %>%
+    mutate(GPP_modeled = NA_real_, C_measured = NA_real_)
+clack_ests%>%
+  pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+               names_sep = '_', values_to = 'value') %>%
+  ggplot(aes(date, value, col = est)) +
+  geom_line() +
+  facet_wrap(.~variable, scales = 'free', ncol = 1)
+
+```
+
+The model is throwing out my prior for process error and using it to create however much carbon it needs to match respiration on any given day. It might help to fit a non-logged obs error? Or maybe using logged GPP and ER?
+
+
+
+## Version: SAM5_detC_logpi  
+Contains:  
+- Latent detrital carbon
+- fixed C0
+- log process error
+- linear scour term
+- SAM GPP five days term
+
+### Data Simulation
+
+```{r}
+ss <- wbp %>%
+    mutate(C = 0.5,
+           HR = 0.5,
+           R = 0.5,
+           R_obs = ER) %>%
+    select(date, P = GPP, ER, R_obs,HR,  R, light, Q, temp_C, litter, C)
+
+
+ndays <- nrow(ss) # number of days
+nweights <- 5
+w <- c(.1, .1, .4, .4, 0)
+ss$Pant = ss$P
+
+for (i in (nweights+1):ndays){
+  Pvec <- numeric(nweights)
+  for(j in 1:nweights){
+    Pvec[j] <- w[j]*ss$P[i-j]
+  }
+  ss$Pant[i]<-sum(Pvec)
+}
+
+# define parameters
+C0 = 100       # Initial organic C
+K20 = .01      # Heterotrophic respiration at 20 C
+beta_s = 0.8   # Percent removal of organic carbon from max storm
+beta_p = 0.3   # Coefficient for yesterday's GPP
+sigma_proc = .02 # lognormally distributed, so this is a % error
+sigma_obs = 0.08 
+
+# Constants
+E_a = 0.63            # activation energy for heterotrophic respiration
+k_b = 8.6173 * 10^-5  # Boltzmann's constant in eV/K
+ARf = 0.44            # the fraction of GPP respired by autotrophs
+
+ss$K = K20 * exp(-E_a/k_b *(1/(ss$temp_C+273) - 1/293))
+
+Chat = numeric()
+Chat[1] = C0
+ss$C[1] = exp(rnorm(1, log(C0), sigma_proc))
+ss$AR = -ARf * ss$P 
+ss$HR[1] =  - ss$K[1] * ss$C[1]
+
+for(i in 2:ndays){
+  Chat[i] = (Chat[i-1] + ss$litter[i] + ss$HR[i-1])*
+      (1-beta_s*ss$Q[i])
+  ss$C[i] = exp(rnorm(1, log(Chat[i]), sigma_proc))
+  ss$HR[i] = - ss$K[i]*ss$C[i] 
+}
+
+ss$R = ss$AR + ss$HR - beta_p * ss$Pant
+# observation model:
+ss$R_obs = rnorm(ndays, ss$R, sigma_obs)
+
+ss %>% select(date, P, Q, R, C, litter )%>%
+pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+  ggplot(aes(date, value, col = var)) +
+  geom_line()+
+  facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
+```
+
+### Stan Code
+
+```{r, comment='', echo = FALSE}
+cat(read_lines('SAM/stan/SAM5_detC_logpi.stan'), sep = '\n')
+```
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), nweights = nweights, R_obs = ss$R_obs,
+                 P = ss$P, C0 = 100, temp = ss$temp_C, 
+                 litter = ss$litter, Q = ss$Q)
+
+mod <- stan('SAM/stan/SAM5_detC_logpi.stan', 
+             data = stan_dat, 
+             chains = 4,  cores = 4, 
+             warmup = 500, iter = 1000)
+beep(8)
+saveRDS(mod, 'SAM/stan/fits/SAM5_detC_logpi_wbp_sim.rds')
+```
+
+### Model Fit
+
+```{r, echo = FALSE}
+mod <- readRDS('SAM/stan/fits/SAM5_detC_logpi_wbp_sim.rds')
+print(mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+traceplot(mod, ncol = 2, pars = c('beta_p', 'beta_s', 'w','sigma_obs', 'sigma_proc'))
+plot_post_sim(mod, pars = c('beta_p', 'beta_s', 'w','sigma_obs', 'sigma_proc'), 
+              vals = c( beta_p, beta_s, w, sigma_obs, sigma_proc), xlim = c(0,1))
+
+fit <- summary(mod)
+modC <- fit$summary[4:(3+ndays),1] 
+modC_sd <- fit$summary[4:(3+ndays),3]
+
+plot(ss$date, ss$C, type = 'l', ylab = 'Carbon (g/m2)', xlab = 'Date')
+points(ss$date, modC, col = 'steelblue', pch = 19)
+polygon(c(wbp$date, rev(wbp$date)), c(modC - modC_sd, rev(modC + modC_sd)), 
+        col = alpha('steelblue', 0.3), border = NA)
+legend('topleft', c('underlying state', 'modeled'), 
+       lty = c(1,0), pch = c(NA,19), col = c('black', 'steelblue'), bty = 'n')
+```
+
+### Model run on NHC data
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), nweights = nweights, R_obs = ss$ER, P = ss$P,
+                 C0 = 100, temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+
+wbp_mod <- stan('SAM/stan/SAM5_detC_logpi.stan', 
+                data = stan_dat, init = 0,
+                chains = 4, cores = 4, 
+                warmup = 500, iter = 2000)
+beep(8)
+saveRDS(wbp_mod, 'SAM/stan/fits/SAM5_detC_logpi_wbp.rds')
+```
+
+```{r, echo = FALSE}
+wbp_mod <- readRDS('SAM/stan/fits/SAM5_detC_logpi_wbp.rds')
+print(wbp_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+traceplot(wbp_mod, ncol = 1, pars=c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+plot(wbp_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+
+fit <- summary(wbp_mod)
+ndays <- nrow(ss)
+# posterior predictive check
+# extract parameters
+K20_mean = 1
+# K20_mean <- fit$summary[4, 1]
+# K20_sd <- fit$summary[4, 3]
+beta_s_mean <- fit$summary[1,1]
+beta_s_sd <- fit$summary[1,3]
+beta_p_mean <- fit$summary[2,1]
+beta_p_sd <- fit$summary[2,3]
+w_mean <- fit$summary[3:7,1]
+sigma_obs_mean = fit$summary[9,1]
+sigma_obs_sd <- fit$summary[9,3]
+sigma_proc_mean <- fit$summary[8,1]
+sigma_proc_sd <- fit$summary[8,3]
+ss$C_modeled <- fit$summary[9:(ndays+8),1]
+# predict data
+ss$Pant_pred = ss$P
+nweights = 5
+for (i in (nweights+1):ndays){
+  Pvec <- numeric(nweights)
+  for(j in 1:nweights){
+    Pvec[j] <- w_mean[j]*ss$P[i-j]
+  }
+  ss$Pant_pred[i]<-sum(Pvec)
+}
+
+ss$K_pred = calc_rate_coef(ss$temp_C, K_20 = K20_mean/100)
+
+Chat = numeric()
+Chat[1] = C0
+ss$HR <- ss$C_pred <- ss$R_pred <- NA_real_
+ss$C_pred[1] = exp(rnorm(1, log(C0), sigma_proc_mean/10))
+ss$AR = -ARf * ss$P 
+ss$HR[1] =  - ss$K_pred[1] * ss$C_pred[1]
+
+for(i in 2:ndays){
+  Chat[i] = (ss$C_pred[i-1] + ss$litter[i] + ss$HR[i-1])*
+      (1-beta_s_mean*ss$Q[i])
+  ss$C_pred[i] = exp(rnorm(1, log(Chat[i]), sigma_proc_mean/10))
+  ss$HR[i] = - ss$K_pred[i]*ss$C_pred[i] 
+}
+
+ss$R_pred = ss$AR + ss$HR - beta_p_mean * ss$Pant_pred
+# observation model:
+ss$R_mod = rnorm(ndays, ss$R_pred, sigma_obs_mean)
+
+
+wbp_ests <- ss %>%
+    select(date, C_modeled, ER_modeled = R_mod, 
+           ER_measured = ER, GPP_measured = P) %>%
+    mutate(GPP_modeled = NA_real_, C_measured = NA_real_)
+wbp_ests%>%
+  pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+               names_sep = '_', values_to = 'value') %>%
+  ggplot(aes(date, value, col = est)) +
+  geom_line() +
+  facet_wrap(.~variable, scales = 'free', ncol = 1)
+```
+
+### Model run on clackamas data
+
+```{r echo = F, include = F}
+ss <- auto %>%
+    mutate(light = light/max(light),
+           Q = discharge/max(discharge),
+           C = 0.5,
+           R = 0.5,
+           R_obs = ER) %>%
+    select(date, P = GPP, ER, R_obs, R, light, Q, temp_C, litter, C)
+```
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), nweights = nweights, R_obs = ss$ER, P = ss$P,
+                 C0 = 100, temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+
+clack_mod <- stan('SAM/stan/SAM5_detC_logpi.stan', 
+                data = stan_dat, init = 0,
+                chains = 4, cores = 4, 
+                warmup = 500, iter = 2000)
+beep(8)
+saveRDS(clack_mod, 'SAM/stan/fits/SAM5_detC_logpi_clack.rds')
+```
+
+```{r, echo = FALSE}
+clack_mod <- readRDS('SAM/stan/fits/SAM5_detC_logpi_clack.rds')
+print(clack_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+traceplot(clack_mod, ncol = 1, pars=c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+plot(clack_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+
+ndays <- nrow(ss)
+fit <- summary(clack_mod)
+# posterior predictive check
+# extract parameters
+K20_mean = 1
+# K20_mean <- fit$summary[4, 1]
+# K20_sd <- fit$summary[4, 3]
+beta_s_mean <- fit$summary[1,1]
+beta_s_sd <- fit$summary[1,3]
+beta_p_mean <- fit$summary[2,1]
+beta_p_sd <- fit$summary[2,3]
+w_mean <- fit$summary[3:7,1]
+sigma_obs_mean = fit$summary[9,1]
+sigma_obs_sd <- fit$summary[9,3]
+sigma_proc_mean <- fit$summary[8,1]
+sigma_proc_sd <- fit$summary[8,3]
+ss$C_modeled <- fit$summary[9:(ndays+8),1]
+# predict data
+ss$Pant_pred = ss$P
+nweights = 5
+for (i in (nweights+1):ndays){
+  Pvec <- numeric(nweights)
+  for(j in 1:nweights){
+    Pvec[j] <- w_mean[j]*ss$P[i-j]
+  }
+  ss$Pant_pred[i]<-sum(Pvec)
+}
+
+ss$K_pred = calc_rate_coef(ss$temp_C, K_20 = K20_mean/100)
+
+Chat = numeric()
+Chat[1] = C0
+ss$HR <- ss$C_pred <- ss$R_pred <- NA_real_
+ss$C_pred[1] = exp(rnorm(1, log(C0), sigma_proc_mean/10))
+ss$AR = -ARf * ss$P 
+ss$HR[1] =  - ss$K_pred[1] * ss$C_pred[1]
+
+for(i in 2:ndays){
+  Chat[i] = (ss$C_pred[i-1] + ss$litter[i] + ss$HR[i-1])*
+      (1-beta_s_mean*ss$Q[i])
+  ss$C_pred[i] = exp(rnorm(1, log(Chat[i]), sigma_proc_mean/10))
+  ss$HR[i] = - ss$K_pred[i]*ss$C_pred[i] 
+}
+
+ss$R_pred = ss$AR + ss$HR - beta_p_mean * ss$Pant_pred
+# observation model:
+ss$R_mod = rnorm(ndays, ss$R_pred, sigma_obs_mean)
+
+
+clack_ests <- ss %>%
+    select(date, C_modeled, ER_modeled = R_mod, 
+           ER_measured = ER, GPP_measured = P) %>%
+    mutate(GPP_modeled = NA_real_, C_measured = NA_real_)
+clack_ests%>%
+  pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+               names_sep = '_', values_to = 'value') %>%
+  ggplot(aes(date, value, col = est)) +
+  geom_line() +
+  facet_wrap(.~variable, scales = 'free', ncol = 1)
+
+```
+
+
+## Version: SAMlogint_detC_logpi  
+Contains:  
+- Latent detrital carbon
+- fixed C0
+- log process error
+- linear scour term
+- SAM GPP four log antecedent intervals
+
+### Data Simulation
+
+```{r}
+ss <- wbp %>%
+    mutate(C = 0.5,
+           HR = 0.5,
+           R = 0.5,
+           R_obs = ER) %>%
+    select(date, P = GPP, ER, R_obs,HR,  R, light, Q, temp_C, litter, C)
+
+
+ndays <- nrow(ss) # number of days
+nweights <- 4
+w <- c(.1, .1, .4, .4)
+ss$Pant = ss$P
+P_pre <- c(rep(ss$P[1], 30), ss$P)
+
+for (i in 31:ndays){
+  Pvec <- numeric(nweights)
+  N <- 0
+  for(j in 1:nweights){
+    n <- 2^j
+    pp <- numeric(n)
+    for(k in 1:n){
+      pp[k] <- w[j]*P_pre[i-N-k]
+    }
+    Pvec[j] <- mean(pp)
+    N <- N + n
+  }
+  ss$Pant[i]<-sum(Pvec)
+}
+
+# define parameters
+C0 = 100       # Initial organic C
+K20 = .01      # Heterotrophic respiration at 20 C
+beta_s = 0.8   # Percent removal of organic carbon from max storm
+beta_p = 0.3   # Coefficient for yesterday's GPP
+sigma_proc = .02 # lognormally distributed, so this is a % error
+sigma_obs = 0.08 
+
+# Constants
+E_a = 0.63            # activation energy for heterotrophic respiration
+k_b = 8.6173 * 10^-5  # Boltzmann's constant in eV/K
+ARf = 0.44            # the fraction of GPP respired by autotrophs
+
+ss$K = K20 * exp(-E_a/k_b *(1/(ss$temp_C+273) - 1/293))
+
+Chat = numeric()
+Chat[1] = C0
+ss$C[1] = exp(rnorm(1, log(C0), sigma_proc))
+ss$AR = -ARf * ss$P 
+ss$HR[1] =  - ss$K[1] * ss$C[1]
+
+for(i in 2:ndays){
+  Chat[i] = (Chat[i-1] + ss$litter[i] + ss$HR[i-1])*
+      (1-beta_s*ss$Q[i])
+  ss$C[i] = exp(rnorm(1, log(Chat[i]), sigma_proc))
+  ss$HR[i] = - ss$K[i]*ss$C[i] 
+}
+
+ss$R = ss$AR + ss$HR - beta_p * ss$Pant
+# observation model:
+ss$R_obs = rnorm(ndays, ss$R, sigma_obs)
+
+ss %>% select(date, P, Q, R, C, litter )%>%
+pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+  ggplot(aes(date, value, col = var)) +
+  geom_line()+
+  facet_wrap(.~var, scales = 'free_y', ncol = 2)
+plot(ss$date, ss$P, type = 'l')
+lines(ss$date, ss$Pant, col = 2)
+legend('topright', c('GPP', 'antecedent GPP'), lty = c(1,1), col = c(1,2), bty = 'n')
+```
+
+### Stan Code
+
+```{r, comment='', echo = FALSE}
+cat(read_lines('SAM/stan/SAMlogint_detC_logpi.stan'), sep = '\n')
+```
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), nweights = nweights, R_obs = ss$R_obs,
+                 P = ss$P, C0 = 100, temp = ss$temp_C, 
+                 litter = ss$litter, Q = ss$Q)
+
+mod <- stan('SAM/stan/SAMlogint_detC_logpi.stan', 
+             data = stan_dat, 
+             chains = 4,  cores = 4, 
+             warmup = 500, iter = 1000)
+beep(8)
+saveRDS(mod, 'SAM/stan/fits/SAM5_detC_logpi_wbp_sim.rds')
+```
+
+### Model Fit
+
+```{r, echo = FALSE}
+mod <- readRDS('SAM/stan/fits/SAMlogint_detC_logpi_wbp_sim.rds')
+print(mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+traceplot(mod, ncol = 2, pars = c('beta_p', 'beta_s', 'w','sigma_obs', 'sigma_proc'))
+plot_post_sim(mod, pars = c('beta_p', 'beta_s', 'w','sigma_obs', 'sigma_proc'), 
+              vals = c( beta_p, beta_s, w, sigma_obs, sigma_proc), xlim = c(0,1))
+
+fit <- summary(mod)
+modC <- fit$summary[9:(8+ndays),1] 
+modC_sd <- fit$summary[9:(8+ndays),3]
+
+plot(ss$date, ss$C, type = 'l', ylab = 'Carbon (g/m2)', xlab = 'Date')
+points(ss$date, modC, col = 'steelblue', pch = 19)
+polygon(c(wbp$date, rev(wbp$date)), c(modC - modC_sd, rev(modC + modC_sd)), 
+        col = alpha('steelblue', 0.3), border = NA)
+legend('topleft', c('underlying state', 'modeled'), 
+       lty = c(1,0), pch = c(NA,19), col = c('black', 'steelblue'), bty = 'n')
+```
+
+### Model run on NHC data
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), nweights = nweights, R_obs = ss$ER, P = ss$P,
+                 C0 = 100, temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+
+wbp_mod <- stan('SAM/stan/SAMlogint_detC_logpi.stan', 
+                data = stan_dat, init = 0,
+                chains = 4, cores = 4, 
+                warmup = 500, iter = 2000)
+beep(8)
+saveRDS(wbp_mod, 'SAM/stan/fits/SAMlogint_detC_logpi_wbp.rds')
+```
+
+```{r, echo = FALSE}
+wbp_mod <- readRDS('SAM/stan/fits/SAMlogint_detC_logpi_wbp.rds')
+print(wbp_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+traceplot(wbp_mod, ncol = 1, pars=c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+plot(wbp_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+
+fit <- summary(wbp_mod)
+ndays <- nrow(ss)
+# posterior predictive check
+# extract parameters
+K20_mean = 1
+# K20_mean <- fit$summary[4, 1]
+# K20_sd <- fit$summary[4, 3]
+beta_s_mean <- fit$summary[1,1]
+beta_s_sd <- fit$summary[1,3]
+beta_p_mean <- fit$summary[2,1]
+beta_p_sd <- fit$summary[2,3]
+w_mean <- fit$summary[3:6,1]
+sigma_obs_mean = fit$summary[8,1]
+sigma_obs_sd <- fit$summary[8,3]
+sigma_proc_mean <- fit$summary[7,1]
+sigma_proc_sd <- fit$summary[7,3]
+ss$C_modeled <- fit$summary[9:(ndays+8),1]
+# predict data
+ss$Pant_pred = ss$P
+nweights = 5
+for (i in (nweights+1):ndays){
+  Pvec <- numeric(nweights)
+  for(j in 1:nweights){
+    Pvec[j] <- w_mean[j]*ss$P[i-j]
+  }
+  ss$Pant_pred[i]<-sum(Pvec)
+}
+
+ss$K_pred = calc_rate_coef(ss$temp_C, K_20 = K20_mean/100)
+
+Chat = numeric()
+Chat[1] = C0
+ss$HR <- ss$C_pred <- ss$R_pred <- NA_real_
+ss$C_pred[1] = exp(rnorm(1, log(C0), sigma_proc_mean/10))
+ss$AR = -ARf * ss$P 
+ss$HR[1] =  - ss$K_pred[1] * ss$C_pred[1]
+
+for(i in 2:ndays){
+  Chat[i] = (ss$C_pred[i-1] + ss$litter[i] + ss$HR[i-1])*
+      (1-beta_s_mean*ss$Q[i])
+  ss$C_pred[i] = exp(rnorm(1, log(Chat[i]), sigma_proc_mean/10))
+  ss$HR[i] = - ss$K_pred[i]*ss$C_pred[i] 
+}
+
+ss$R_pred = ss$AR + ss$HR - beta_p_mean * ss$Pant_pred
+# observation model:
+ss$R_mod = rnorm(ndays, ss$R_pred, sigma_obs_mean)
+
+
+wbp_ests <- ss %>%
+    select(date, C_modeled, ER_modeled = R_mod, 
+           ER_measured = ER, GPP_measured = P) %>%
+    mutate(GPP_modeled = NA_real_, C_measured = NA_real_)
+wbp_ests%>%
+  pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+               names_sep = '_', values_to = 'value') %>%
+  ggplot(aes(date, value, col = est)) +
+  geom_line() +
+  facet_wrap(.~variable, scales = 'free', ncol = 1)
+```
+
+### Model run on clackamas data
+
+```{r echo = F, include = F}
+ss <- auto %>%
+    mutate(light = light/max(light),
+           Q = discharge/max(discharge),
+           C = 0.5,
+           R = 0.5,
+           R_obs = ER) %>%
+    select(date, P = GPP, ER, R_obs, R, light, Q, temp_C, litter, C)
+```
+
+```{r, eval = FALSE}
+stan_dat <- list(ndays = nrow(ss), nweights = nweights, R_obs = ss$ER, P = ss$P,
+                 C0 = 100, temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+
+clack_mod <- stan('SAM/stan/SAM5_detC_logpi.stan', 
+                data = stan_dat, init = 0,
+                chains = 4, cores = 4, 
+                warmup = 500, iter = 2000)
+beep(8)
+saveRDS(clack_mod, 'SAM/stan/fits/SAM5_detC_logpi_clack.rds')
+```
+
+```{r, echo = FALSE}
+clack_mod <- readRDS('SAM/stan/fits/SAM5_detC_logpi_clack.rds')
+print(clack_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+traceplot(clack_mod, ncol = 1, pars=c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+plot(clack_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+
+ndays <- nrow(ss)
+fit <- summary(clack_mod)
+# posterior predictive check
+# extract parameters
+K20_mean = 1
+# K20_mean <- fit$summary[4, 1]
+# K20_sd <- fit$summary[4, 3]
+beta_s_mean <- fit$summary[1,1]
+beta_s_sd <- fit$summary[1,3]
+beta_p_mean <- fit$summary[2,1]
+beta_p_sd <- fit$summary[2,3]
+w_mean <- fit$summary[3:7,1]
+sigma_obs_mean = fit$summary[9,1]
+sigma_obs_sd <- fit$summary[9,3]
+sigma_proc_mean <- fit$summary[8,1]
+sigma_proc_sd <- fit$summary[8,3]
+ss$C_modeled <- fit$summary[9:(ndays+8),1]
+# predict data
+ss$Pant_pred = ss$P
+nweights = 5
+for (i in (nweights+1):ndays){
+  Pvec <- numeric(nweights)
+  for(j in 1:nweights){
+    Pvec[j] <- w_mean[j]*ss$P[i-j]
+  }
+  ss$Pant_pred[i]<-sum(Pvec)
+}
+
+ss$K_pred = calc_rate_coef(ss$temp_C, K_20 = K20_mean/100)
+
+Chat = numeric()
+Chat[1] = C0
+ss$HR <- ss$C_pred <- ss$R_pred <- NA_real_
+ss$C_pred[1] = exp(rnorm(1, log(C0), sigma_proc_mean/10))
+ss$AR = -ARf * ss$P 
+ss$HR[1] =  - ss$K_pred[1] * ss$C_pred[1]
+
+for(i in 2:ndays){
+  Chat[i] = (ss$C_pred[i-1] + ss$litter[i] + ss$HR[i-1])*
+      (1-beta_s_mean*ss$Q[i])
+  ss$C_pred[i] = exp(rnorm(1, log(Chat[i]), sigma_proc_mean/10))
+  ss$HR[i] = - ss$K_pred[i]*ss$C_pred[i] 
+}
+
+ss$R_pred = ss$AR + ss$HR - beta_p_mean * ss$Pant_pred
+# observation model:
+ss$R_mod = rnorm(ndays, ss$R_pred, sigma_obs_mean)
+
+
+clack_ests <- ss %>%
+    select(date, C_modeled, ER_modeled = R_mod, 
+           ER_measured = ER, GPP_measured = P) %>%
+    mutate(GPP_modeled = NA_real_, C_measured = NA_real_)
+clack_ests%>%
+  pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+               names_sep = '_', values_to = 'value') %>%
+  ggplot(aes(date, value, col = est)) +
+  geom_line() +
+  facet_wrap(.~variable, scales = 'free', ncol = 1)
+
+```
+
+
+
+### Data Simulation
+
+```{r}
+
+# define parameters
+C0 = 100       # Initial organic C
+K20 = .01      # Heterotrophic respiration at 20 C
+beta_s = 0.8   # Percent removal of organic carbon from max storm
+beta_p = 0.3   # Coefficient for yesterday's GPP
+sigma_proc = .02 # lognormally distributed, so this is a % error
+sigma_obs = 0.08 
+
+# Constants
+E_a = 0.63            # activation energy for heterotrophic respiration
+k_b = 8.6173 * 10^-5  # Boltzmann's constant in eV/K
+ARf = 0.44            # the fraction of GPP respired by autotrophs
+
+ss$K = K20 * exp(-E_a/k_b *(1/(ss$temp_C+273) - 1/293))
+
+Chat = numeric()
+Chat[1] = C0
+ss$C[1] = exp(rnorm(1, log(C0), sigma_proc))
+ss$AR = -ARf * ss$P 
+ss$HR[1] =  - ss$K[1] * ss$C[1]
+
+for(i in 2:ndays){
+  Chat[i] = (Chat[i-1] + ss$litter[i] + ss$HR[i-1])*
+      (1-beta_s*ss$Q[i])
+  ss$C[i] = exp(rnorm(1, log(Chat[i]), sigma_proc))
+  ss$HR[i] = - ss$K[i]*ss$C[i] 
+}
+
+ss$R = ss$AR + ss$HR - beta_p * ss$Pant
+# observation model:
+ss$R_obs = rnorm(ndays, ss$R, sigma_obs)
+
+ss %>% select(date, P, Q, R, C, litter )%>%
+pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+  ggplot(aes(date, value, col = var)) +
+  geom_line()+
+  facet_wrap(.~var, scales = 'free_y', ncol = 2)
+
+
+
+```
+
+### Model Fit
+
+
+```{r include = FALSE}
+# ## Version: P1_detC_logpi  
+# Contains:  
+# - Latent detrital carbon
+# - fixed C0
+# - log process error
+# - linear scour term
+# - linear GPP yesterday term
+# 
+# ### Data Simulation
+# 
+# ```{r}
+# ss <- wbp %>%
+#     mutate(light = PAR_surface/max(PAR_surface),
+#            Q = discharge/max(discharge),
+#            C = 0.5,
+#            HR = 0.5,
+#            R = 0.5,
+#            R_obs = ER) %>%
+#     select(date, P = GPP, ER, R_obs,HR,  R, light, Q, temp_C, litter, C)
+# 
+# 
+# ndays <- nrow(ss) # number of days
+# ss$Pant = c(ss$P[1], ss$P[1:(ndays-1)])           
+# 
+# # define parameters
+# C0 = 100       # Initial organic C
+# K20 = .01      # Heterotrophic respiration at 20 C
+# beta_s = 0.8   # Percent removal of organic carbon from max storm
+# beta_p = 0.3   # Coefficient for yesterday's GPP
+# sigma_proc = .02 # lognormally distributed, so this is a % error
+# sigma_obs = 0.08 
+# 
+# # Constants
+# E_a = 0.63            # activation energy for heterotrophic respiration
+# k_b = 8.6173 * 10^-5  # Boltzmann's constant in eV/K
+# ARf = 0.44            # the fraction of GPP respired by autotrophs
+# 
+# ss$K = K20 * exp(-E_a/k_b *(1/(ss$temp_C+273) - 1/293))
+# 
+# Chat = numeric()
+# Chat[1] = C0
+# ss$C[1] = exp(rnorm(1, log(C0), sigma_proc))
+# ss$AR = -ARf * ss$P 
+# ss$HR[1] =  - ss$K[1] * ss$C[1]
+# 
+# for(i in 2:ndays){
+#   Chat[i] = (Chat[i-1] + ss$litter[i] + ss$HR[i-1])*
+#       (1-beta_s*ss$Q[i])
+#   ss$C[i] = exp(rnorm(1, log(Chat[i]), sigma_proc))
+#   ss$HR[i] = - ss$K[i]*ss$C[i] 
+# }
+# 
+# ss$R = ss$AR + ss$HR - beta_p * ss$Pant
+# # observation model:
+# ss$R_obs = rnorm(ndays, ss$R, sigma_obs)
+# 
+# ss %>% select(date, P, Q, R, C, litter )%>%
+# pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+#   ggplot(aes(date, value, col = var)) +
+#   geom_line()+
+#   facet_wrap(.~var, scales = 'free_y', ncol = 2)
+# 
+# ```
+# 
+# ### Stan Code
+# 
+# ```{r, comment='', echo = FALSE}
+# cat(read_lines('SAM/stan/P1_detC_logpi.stan'), sep = '\n')
+# ```
+# 
+# ```{r, eval = FALSE}
+# stan_dat <- list(ndays = nrow(ss), R_obs = ss$R_obs, P = ss$P, C0 = 100, 
+#                  temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+# 
+# mod <- stan('SAM/stan/P1_detC_logpi.stan', 
+#              data = stan_dat, 
+#              chains = 4,  cores = 4, 
+#              warmup = 500, iter = 1000)
+# beep(8)
+# saveRDS(mod, 'SAM/stan/fits/P1_detC_logpi_wbp_sim.rds')
+# ```
+# 
+# ### Model Fit
+# 
+# ```{r, echo = FALSE}
+# mod <- readRDS('SAM/stan/fits/P1_detC_logpi_wbp_sim.rds')
+# print(mod, pars = c('beta_p', 'beta_s', 'sigma_obs', 'sigma_proc'))
+# traceplot(mod, ncol = 2, pars = c('beta_p', 'beta_s', 'sigma_obs', 'sigma_proc'))
+# plot_post_sim(mod, pars = c('beta_p', 'beta_s', 'sigma_obs', 'sigma_proc'), 
+#               vals = c( beta_p, beta_s, sigma_obs, sigma_proc), xlim = c(0,1))
+# 
+# fit <- summary(mod)
+# modC <- fit$summary[4:(3+ndays),1] 
+# modC_sd <- fit$summary[4:(3+ndays),3]
+# 
+# plot(ss$date, ss$C, type = 'l', ylab = 'Carbon (g/m2)', xlab = 'Date')
+# points(ss$date, modC, col = 'steelblue', pch = 19)
+# polygon(c(wbp$date, rev(wbp$date)), c(modC - modC_sd, rev(modC + modC_sd)), 
+#         col = alpha('steelblue', 0.3), border = NA)
+# legend('topleft', c('underlying state', 'modeled'), 
+#        lty = c(1,0), pch = c(NA,19), col = c('black', 'steelblue'), bty = 'n')
+# ```
+# 
+# ### Model run on NHC data
+# 
+# ```{r, eval = FALSE}
+# stan_dat <- list(ndays = nrow(ss), R_obs = ss$ER, P = ss$P, C0 = 100,
+#                  temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+# 
+# wbp_mod <- stan('SAM/stan/P1_detC_logpi.stan', 
+#                 data = stan_dat, init = 0,
+#                 chains = 4, cores = 4, 
+#                 warmup = 500, iter = 2000)
+# beep(8)
+# saveRDS(wbp_mod, 'SAM/stan/fits/P1_detC_logpi_wbp.rds')
+# ```
+# 
+# ```{r, echo = FALSE}
+# wbp_mod <- readRDS('SAM/stan/fits/P1_detC_logpi_wbp.rds')
+# print(wbp_mod, pars = c('beta_p', 'beta_s', 'sigma_obs', 'sigma_proc'))
+# traceplot(wbp_mod, ncol = 1, pars=c('beta_p', 'beta_s', 'sigma_obs', 'sigma_proc'))
+# 
+# fit <- summary(wbp_mod)
+# modC <- fit$summary[5:383,1] 
+# modC_sd <- fit$summary[5:363,3]
+# mod_R <- -ARf * ss$P - K20 * exp(-E_a/k_b*(1/(ss$temp_C + 273) - 1/293)) * modC
+# mod_R <- rnorm(length(mod_R), mod_R, fit$summary[3,1])
+# 
+# wbp_ests <- ss %>%
+#   mutate(litter_measured = litter, C_modeled = modC, ER_modeled = mod_R, 
+#          GPP_modeled = NA_real_, C_measured = NA_real_) %>%
+#   rename(ER_measured = ER, GPP_measured = P) 
+# wbp_ests%>%
+#   pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+#                names_sep = '_', values_to = 'value') %>%
+#   ggplot(aes(date, value, col = est)) +
+#   geom_line() +
+#   facet_wrap(.~variable, scales = 'free', ncol = 1)
+# 
+# ```
+# 
+# ### Model run on clackamas data
+# 
+# ```{r echo = F, include = F}
+# ss <- auto %>%
+#     mutate(light = light/max(light),
+#            Q = discharge/max(discharge),
+#            C = 0.5,
+#            R = 0.5,
+#            R_obs = ER) %>%
+#     select(date, P = GPP, ER, R_obs, R, light, Q, temp_C, litter, C)
+# ```
+# 
+# ```{r, eval = FALSE}
+# stan_dat <- list(ndays = nrow(ss), R_obs = ss$ER, P = ss$P, C0 = 100,
+#                  temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+# 
+# clack_mod <- stan('SAM/stan/P1_detC_logpi.stan', 
+#                 data = stan_dat, init = 0,
+#                 chains = 4, cores = 4, 
+#                 warmup = 500, iter = 2000)
+# beep(8)
+# saveRDS(clack_mod, 'SAM/stan/fits/P1_detC_logpi_clack.rds')
+# ```
+# 
+# ```{r, echo = FALSE}
+# clack_mod <- readRDS('SAM/stan/fits/P1_detC_logpi_clack.rds')
+# print(clack_mod, pars = c('beta_p', 'beta_s', 'sigma_obs', 'sigma_proc'))
+# traceplot(clack_mod, ncol = 1, pars=c('beta_p', 'beta_s', 'sigma_obs', 'sigma_proc'))
+# 
+# fit <- summary(clack_mod)
+# modC <- fit$summary[4:368,1] 
+# modC_sd <- fit$summary[4:368,3]
+# mod_R <- -ARf * ss$P - K20 * exp(-E_a/k_b*(1/(ss$temp_C + 273) - 1/293)) * modC
+# mod_R <- rnorm(length(mod_R), mod_R, fit$summary[3,1])
+# 
+# clack_ests <- ss %>%
+#   mutate(litter_measured = litter, C_modeled = modC, ER_modeled = mod_R, 
+#          GPP_modeled = NA_real_, C_measured = NA_real_) %>%
+#   rename(ER_measured = ER, GPP_measured = P) 
+# clack_ests%>%
+#   pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+#                names_sep = '_', values_to = 'value') %>%
+#   ggplot(aes(date, value, col = est)) +
+#   geom_line() +
+#   facet_wrap(.~variable, scales = 'free', ncol = 1)
+# 
+# ```
+# 
+# 
+# ```{r, include = FALSE}
+# ```{r, echo = FALSE}
+# mod <- readRDS('SAM/stan/fits/SAM5_detC_logpi_wbp_sim.rds')
+# print(mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+# traceplot(mod, ncol = 2, pars = c('beta_p', 'beta_s', 'w','sigma_obs', 'sigma_proc'))
+# plot_post_sim(mod, pars = c('beta_p', 'beta_s', 'w','sigma_obs', 'sigma_proc'), 
+#               vals = c( beta_p, beta_s, w, sigma_obs, sigma_proc), xlim = c(0,1))
+# 
+# fit <- summary(mod)
+# modC <- fit$summary[4:(3+ndays),1] 
+# modC_sd <- fit$summary[4:(3+ndays),3]
+# 
+# plot(ss$date, ss$C, type = 'l', ylab = 'Carbon (g/m2)', xlab = 'Date')
+# points(ss$date, modC, col = 'steelblue', pch = 19)
+# polygon(c(wbp$date, rev(wbp$date)), c(modC - modC_sd, rev(modC + modC_sd)), 
+#         col = alpha('steelblue', 0.3), border = NA)
+# legend('topleft', c('underlying state', 'modeled'), 
+#        lty = c(1,0), pch = c(NA,19), col = c('black', 'steelblue'), bty = 'n')
+# ```
+# 
+# ### Model run on NHC data
+# 
+# ```{r, eval = FALSE}
+# stan_dat <- list(ndays = nrow(ss), nweights = nweights, R_obs = ss$ER, P = ss$P,
+#                  C0 = 100, temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+# 
+# wbp_mod <- stan('SAM/stan/SAM5_detC_logpi.stan', 
+#                 data = stan_dat, init = 0,
+#                 chains = 4, cores = 4, 
+#                 warmup = 500, iter = 2000)
+# beep(8)
+# saveRDS(wbp_mod, 'SAM/stan/fits/P1_detC_logpi_wbp.rds')
+# ```
+# 
+# ```{r, echo = FALSE}
+# wbp_mod <- readRDS('SAM/stan/fits/SAM5_detC_logpi_wbp.rds')
+# print(wbp_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+# traceplot(wbp_mod, ncol = 1, pars=c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+# plot(wbp_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+# 
+# fit <- summary(wbp_mod)
+# modC <- fit$summary[5:383,1] 
+# modC_sd <- fit$summary[5:363,3]
+# mod_R <- -ARf * ss$P - K20 * exp(-E_a/k_b*(1/(ss$temp_C + 273) - 1/293)) * modC
+# mod_R <- rnorm(length(mod_R), mod_R, fit$summary[3,1])
+# 
+# wbp_ests <- ss %>%
+#   mutate(litter_measured = litter, C_modeled = modC, ER_modeled = mod_R, 
+#          GPP_modeled = NA_real_, C_measured = NA_real_) %>%
+#   rename(ER_measured = ER, GPP_measured = P) 
+# wbp_ests%>%
+#   pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+#                names_sep = '_', values_to = 'value') %>%
+#   ggplot(aes(date, value, col = est)) +
+#   geom_line() +
+#   facet_wrap(.~variable, scales = 'free', ncol = 1)
+# 
+# ```
+# 
+# ### Model run on clackamas data
+# 
+# ```{r echo = F, include = F}
+# ss <- auto %>%
+#     mutate(light = light/max(light),
+#            Q = discharge/max(discharge),
+#            C = 0.5,
+#            R = 0.5,
+#            R_obs = ER) %>%
+#     select(date, P = GPP, ER, R_obs, R, light, Q, temp_C, litter, C)
+# #```
+# 
+# #```{r, eval = FALSE}
+# stan_dat <- list(ndays = nrow(ss), nweights = nweights, R_obs = ss$ER, P = ss$P,
+#                  C0 = 100, temp = ss$temp_C, litter = ss$litter, Q = ss$Q)
+# 
+# clack_mod <- stan('SAM/stan/SAM5_detC_logpi.stan', 
+#                 data = stan_dat, init = 0,
+#                 chains = 4, cores = 4, 
+#                 warmup = 500, iter = 2000)
+# beep(8)
+# saveRDS(clack_mod, 'SAM/stan/fits/SAM5_detC_logpi_clack.rds')
+# ```
+# 
+# ```{r, echo = FALSE}
+# clack_mod <- readRDS('SAM/stan/fits/SAM5_detC_logpi_clack.rds')
+# print(clack_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+# traceplot(clack_mod, ncol = 1, pars=c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+# plot(clack_mod, pars = c('beta_p', 'beta_s', 'w', 'sigma_obs', 'sigma_proc'))
+# fit <- summary(clack_mod)
+# modC <- fit$summary[4:368,1] 
+# modC_sd <- fit$summary[4:368,3]
+# mod_R <- -ARf * ss$P - K20 * exp(-E_a/k_b*(1/(ss$temp_C + 273) - 1/293)) * modC
+# mod_R <- rnorm(length(mod_R), mod_R, fit$summary[3,1])
+# 
+# clack_ests <- ss %>%
+#   mutate(litter_measured = litter, C_modeled = modC, ER_modeled = mod_R, 
+#          GPP_modeled = NA_real_, C_measured = NA_real_) %>%
+#   rename(ER_measured = ER, GPP_measured = P) 
+# clack_ests%>%
+#   pivot_longer(ends_with(c("_measured", "_modeled")), names_to = c('variable', 'est'),
+#                names_sep = '_', values_to = 'value') %>%
+#   ggplot(aes(date, value, col = est)) +
+#   geom_line() +
+#   facet_wrap(.~variable, scales = 'free', ncol = 1)
+# 
+# 
+# ```
+# 
+# 
+# 
+# 
+# ## Version: SAM_detC_1
+# 
+# ### Data Simulation
+# ```{r}
+# 
+# ndays <- nrow(ss) # number of days
+# nweight = 5       # number of antecedent intervals
+# 
+# # define parameters
+# C0 = 100
+# K20 = .01      # Heterotrophic respiration at 20 C
+# beta_s = 0.8   # Percent removal of organic carbon from max storm
+# tau0 = quantile(ss$tau_mgm2, .75)
+# beta_p = .5
+# w = rep(1/nweight, nweight)
+# sigma_proc = .01 # lognormally distributed, so this is a % error
+# sigma_obs = 0.08 
+# 
+# # Constants
+# Ea = 0.63              # activation energy for heterotrophic respiration
+# k_b = 8.6173 * 10^-5  # Boltzmann's constant in eV/K
+# ARf = 0.44              # the fraction of GPP respired by autotrophs
+# 
+# # Process Model:
+# # Antecedent Productivity:
+# Pant = ss$GPP_C
+# 
+# for (i in (nweight+1):ndays){
+#   Pvec <- numeric(nweight)
+#   for(j in 1:nweight){
+#     Pvec[j] <- w[j]*ss$GPP_C[i-j]
+#   }
+#   Pant[i]<-sum(Pvec)
+# }
+# 
+# # Calculate shear stress ratio as a function of the minimum stress to cause a disturbance
+# ss$ss = if_else(ss$tau_mgm2 >= tau0, ((ss$tau_mgm2 - tau0)/(max(ss$tau_mgm2) - tau0))^2, 0)
+# ss$K = K20 * exp(Ea/k_b *(1/(ss$temp_C + 273) - 1/293))
+# ss$C = rep(C0, ndays)
+# ss$AR = -ARf * ss$GPP_C
+# ss$HR_d = rep(-ss$K[1] * C0, ndays)
+# ss$HR_p = rep(-beta_p * ss$GPP_C[1], ndays)
+# 
+# Chat = numeric()
+# Chat[1] = C0
+# 
+# for(i in 2:ndays){
+#   Chat[i] = Chat[i-1] * (1 - beta_s * ss$ss[i]) + ss$HR_d[i-1] + ss$litter[i]
+#   ss$C[i] = exp(rnorm(1, log(Chat[i]), sigma_proc))
+#   ss$HR_d[i] = -ss$K[i] * ss$C[i]
+#   ss$HR_p[i] = -beta_p * Pant[i]
+# }
+# 
+# # observation model:
+# ss$R = ss$AR + ss$HR_d + ss$HR_p 
+# ss$R_obs = rnorm(ndays, ss$R, sigma_obs)
+# 
+# ss %>% select(date, GPP_C, discharge, R, C, HR_p, HR_d, AR, litter )%>%
+# pivot_longer( -date, names_to = 'var', values_to = 'value') %>%
+#   ggplot(aes(date, value, col = var)) +
+#   geom_line()+
+#   facet_wrap(.~var, scales = 'free_y', ncol = 2)
+# S <- ss
+# 
+# ```
+# 
+# ### Stan Code
+# 
+# ```{r, comment='', echo = FALSE}
+# cat(read_lines('SAM/stan/SAM_detC_1.stan'), sep = '\n')
+# ```
+# 
+# ```{r, eval = FALSE}
+# ss <- ss[1:30,]
+# stan_dat <- list(ndays = nrow(ss), nweights = nweight, 
+#                  R_obs = ss$ER_C, P = ss$GPP_C, C0 = 100, 
+#                  temp = ss$temp_C, tau = ss$tau_mgm2, litter = ss$litter)
+# 
+# mod <- stan('SAM/stan/SAM_detC_1.stan', 
+#              data = stan_dat, 
+#              chains = 4,  cores = 4, 
+#              warmup = 500, iter = 1000)
+# saveRDS(mod, 'SAM/stan/fits/SAM_detC_1_potomac.rds')
+# ```
+# 
+# Run Stan model 
+# ```{r, echo = FALSE}
+# mod <- readRDS('SAM/stan/fits/SAM_detC_1_potomac.rds')
+# print(mod, pars = c('C0', 'K_20', 'beta_s', 'tau0', 'beta_p', 'w', 
+#                     'sigma_obs', 'sigma_proc'))
+# traceplot(mod, ncol = 2, pars=c( 'beta_s', 'tau0', 'beta_p', 'w', 
+#                     'sigma_obs', 'sigma_proc'))
+# plot_post_sim(mod, pars = c( 'beta_s', 'tau0', 'beta_p', 'w', 
+#                     'sigma_obs', 'sigma_proc'), 
+#               vals = c( beta_s, tau0, beta_p, w, sigma_obs, sigma_proc))
+# ```
+# 
+# Thoughts:
+# Why does the model sample values that don't seem to match the lognormal distribution I'm giving it?
+# Are beta_s and tau0 trading off in this model? Does Segatto allow them to completely be scoured?
+# Why is my process error so high?
+# 
+# Tests:
+# - normal process error
+# - beta_s = 1
+# - break model into component parts (SAM and latent carbon)
+# - Fit model to NHC and to the Klamath
+```

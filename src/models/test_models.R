@@ -95,6 +95,7 @@ pecos <- filter(dat, grepl('^Pecos.*?Sheff', long_name)) %>%
     prep_data() %>% filter(date >= as.Date('2014-01-01')&
                                date < as.Date('2016-01-01'))
 
+
 # bind_rows(newR, fanno, grand, east, clack, pecos) %>%
 #     ggplot(aes(date, GPP, col = sitecode)) +
 #     geom_line() + geom_line(aes(y = ER)) +

@@ -1,0 +1,175 @@
+---
+title: "autotrophic rivers"
+author: "alice carter"
+date: "9/20/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+setwd('C:/Users/Alice Carter/git/autotrophic_rivers/')
+library(tidyverse)
+library(lubridate)
+
+```
+
+## Autotrophic rivers in the Powell Center Synthesis
+
+This is an initial exploration of streams that are autotrophic at the annual timescale from the Powell Center data synthesis. 
+
+# Data:
+
+```{r}
+dat <- read_csv('data/filled_annual_metabolism_with_trophic_state.csv')
+ah <- read_csv('data/autohetero_quantiles_siteyears_daily_filled_data.csv')
+```
+
+# Characteristics of autotrophic site years:
+
+```{r}
+ah %>%
+  mutate(log_ws_area = log(WS_area_km2), stream_order = StreamOrde) %>%
+  pivot_longer(cols = c('log_ws_area', 'Width', 'stream_order', 'Lat'), 
+               names_to = 'variable', values_to = 'value') %>%
+  ggplot(aes(trophic, value, fill = trophic)) +
+  geom_boxplot() + 
+  facet_wrap(~variable, scales = 'free_y')
+
+```
+
+Rivers that are autotrophic at the annual timescale appear to have somewhat larger watersheds and be wider than heterotrophic streams, both unsurprising relationships. More exploration of individual sites and broad patterns is needed:
+
+Overall, 85 site years (out of 872) from 36 unique sites are autotrophic 
+```{r}
+unique(auto$Name)
+
+
+```
+
+Examine seasonality of autotrophy in these sites vs in the heterotrophic powell center sites:
+```{r}
+dat <- read_csv('data/autotrophic_siteyears_daily_filled_2.csv')
+sp_full <- read_csv('C:/Users/Alice Carter/git/loticlentic_synthesis/data/sp_full.csv')
+
+# Compare the timing of peak metabolic fluxes across the heterotrophic and autotrophic site years
+
+sitemonths = dat %>%
+  rename(GPP = GPP_C_filled,
+         ER = ER_C_filled,
+         NEP = NEP_C) %>%
+  mutate(month = month(Date)) %>%
+  group_by(sitecode, year, month) %>%
+  summarize(across(c(GPP, ER, NEP), mean, na.rm = TRUE),
+            .groups = 'drop') %>%
+  group_by(sitecode, month) %>%
+  summarize(across(c(GPP, ER, NEP), #mean, na.rm = TRUE),
+                   list(mean = ~mean(., na.rm = TRUE),
+                        sd = ~sd(., na.rm = TRUE))),
+            n = n(),
+            .groups = 'drop')
+
+sitemonths_all = sp_full %>%
+  filter(!(sitecode %in% unique(dat$sitecode))) %>%
+  rename(GPP = GPP_C_filled,
+         ER = ER_C_filled) %>%
+  mutate(month = month(Date), 
+         NEP = GPP + ER) %>%
+  group_by(sitecode, Year, month) %>%
+  summarize(across(c(GPP, ER, NEP), mean, na.rm = TRUE),
+            .groups = 'drop') %>%
+  group_by(sitecode, month) %>%
+  summarize(across(c(GPP, ER, NEP), #mean, na.rm = TRUE),
+                   list(mean = ~mean(., na.rm = TRUE),
+                        sd = ~sd(., na.rm = TRUE))),
+            n = n(),
+            .groups = 'drop')
+
+
+maxmonths_etc_gpp = sitemonths %>%
+  group_by(sitecode) %>%
+  filter(GPP_mean == max(GPP_mean),
+         n == max(n)) %>%
+  summarize(GPP_mean = first(GPP_mean),
+            n = first(n),
+            month = first(month),
+            .groups = 'drop')
+maxmonths_etc_gpp_all = sitemonths_all %>%
+  group_by(sitecode) %>%
+  filter(GPP_mean == max(GPP_mean),
+         n == max(n)) %>%
+  summarize(GPP_mean = first(GPP_mean),
+            n = first(n),
+            month = first(month),
+            .groups = 'drop')
+maxmonths_etc_nep = sitemonths %>%
+  group_by(sitecode) %>%
+  filter(NEP_mean == max(NEP_mean),
+         n == max(n)) %>%
+  summarize(NEP_mean = first(NEP_mean),
+            n = first(n),
+            month = first(month),
+            .groups = 'drop')
+maxmonths_etc_nep_all = sitemonths_all %>%
+  group_by(sitecode) %>%
+  filter(NEP_mean == max(NEP_mean),
+         n == max(n)) %>%
+  summarize(NEP_mean = first(NEP_mean),
+            n = first(n),
+            month = first(month),
+            .groups = 'drop')
+par(mfrow = c(1,2))
+plot(density(maxmonths_etc_gpp_all$month), main = 'Timing of peak GPP',
+     xlab = 'month', xaxt = 'n', ylim = c(0.01, 0.26), lty = 2, bty = 'n')
+axis(1, at = seq(1:12), labels = month.abb)
+lines(density(maxmonths_etc_gpp$month))
+
+
+plot(density(maxmonths_etc_nep_all$month), main = 'Timing of peak NEP', bty = 'n',
+     xlab = 'month', xaxt = 'n', ylim = c(0, 0.19), xlim = c(0.5,12.5), lty = 2)
+axis(1, at = seq(1:12), labels = month.abb)
+lines(density(maxmonths_etc_nep$month))
+legend(x = 6, y = 0.18, legend=c('autotrophic', 'heterotrophic'),
+       lty = c(1,2), bty = 'n', border = NA, 
+       xpd = T)
+
+```
+
+In autotrophic rivers, GPP has a clear summer peak that translates into the annual pattern observed with NEP. By contrast, heterotrophic rivers show some that have peak GPP in the spring and some in the summer, but due to higher summer respiration, most heterotrophic streams have peak NEP (as net autotrophy) in the spring. 
+
+How often are autotrophic rivers autotrophic throughout the year?
+
+```{r}
+sitemonths %>%
+  ggplot(aes(month, NEP_mean, group = sitecode)) +
+  geom_line()+
+  ggtitle('Seasonal pattern of net autotrophy in autotrophic streams')
+```
+
+In most cases, there is not a distinct seasonal peak in autotrophy or heterotrophy. With notable exceptions, most streams in this category spend most of the year with little net metabolic flux.
+
+### Snake river data
+
+```{r}
+snake <- filter(dat, sitecode == 'nwis_13173600')
+
+ggplot(snake, aes(iT_norm, kO2, col = NEP_C)) +
+  geom_point(size = 2) +
+  scale_color_gradientn(colors = rev(terrain.colors(3)))
+
+
+plot(snake$discharge_m3s, snake$GPP_C_filled, log = 'x', xlab = 'discharge (m3/s)', ylab = 'GPP (gC/m2/d)')
+
+```
+
+Next steps
+
+1. Continue to explore the lotic/lentic nature of these streams. Are there patterns over time with increased GPP or shifts toward more net autotrophy? 
+
+2. What is upstream? the contributing watershed area suggests that these are larger basins, but are they cutoff from their upslope area somehow? Try looking for distance to lakes or reservoirs in NHD.
+
+3. repeat the analyses in the SP paper - what month are the peaks, etc for this group of streams? What does the same SEM model say about them? 
+
+4. Look at specific sites, particularly if any of them overlap with the lotic lentic ones
+
+5. build seasonal graph
+

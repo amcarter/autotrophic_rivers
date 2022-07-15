@@ -1,6 +1,6 @@
 # Stan Helper functions
 #A Carter
-
+library(tidyverse)
 
 # extracting and summarizing data:
 get_pars <- function(mod, pars, as_list = FALSE){
@@ -125,10 +125,10 @@ plot_pp_interval <- function(obs, pp, ylim = NULL, xrng = NULL){
 
 }
 
-png('figures/simulation_fits/PPcheck_SAMint_detC_logpi_ss_clackiver_sim.png',
-    width = 350, height = 350)
-plot_pp_interval(sim_clack$R_obs, pp, xrng = c(31, 396))#, ylim = c(-30,0))
-dev.off()
+# png('figures/simulation_fits/PPcheck_SAMint_detC_logpi_ss_clackiver_sim.png',
+#     width = 350, height = 350)
+# plot_pp_interval(sim_clack$R_obs, pp, xrng = c(31, 396))#, ylim = c(-30,0))
+# dev.off()
 
 
 plot_ER_breakdown <- function(fit, pars, cols = c('#90C590', '#AFDBE4', '#F4B570'),
