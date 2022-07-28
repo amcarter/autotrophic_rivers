@@ -3,7 +3,7 @@ library(tidyverse)
 library(beepr)
 library(rstan)
 library(shinystan)
-source('src/SAM/simulate/simulation_functions.R')
+source('src/models/simulate/simulation_functions.R')
 source('src/stan_helpers.R')
 rstan_options(javascript = FALSE)
 # Model Versions ####
@@ -24,18 +24,19 @@ rstan_options(javascript = FALSE)
 dat <- read_csv('../nhc_50yl/data/met_and_drivers_for_model.csv')
 mdat <- read_csv('../nhc_50yl/data/siteData/NHCsite_metadata.csv') %>%
     select(site = sitecode, slope = slope_wbx)
-dat <- dat %>% left_join(mdat)
+dat <- dat %>% left_join(mdat) %>%
+    select(-PAR_surface)
+LAI <- read_csv('../nhc_50yl/data/light/drivers/daily_modeled_light_all_sites.csv')
+dat <- dat %>% left_join(LAI, by = c('site', 'date'))
 # simulate data
 prep_data <- function(dat){
     dd <- dat %>%
         arrange(date) %>%
-        mutate(litter = case_when(date >= as.Date('2019-10-05') &
-                                      date <= as.Date('2019-10-24') ~ 25,
-                                  TRUE ~ 0))%>%
-        select(site, date, GPP, ER, ER.upper, ER.lower, depth,
-               slope, discharge, PAR_surface, litter, temp_C = temp.water) %>%
+        select(site, date, GPP, ER, ER.upper, ER.lower, slope, depth,
+               discharge, temp_C = temp.water, PAR_surface, LAI) %>%
         complete(date = seq(min(date), max(date), by = 'day'))%>%
-        mutate(across(c(-site, -date),
+        mutate(litter = calc_litter_oneyear(500, LAI),
+               across(c(-site, -date),
                       zoo::na.approx, na.rm = F),
                light = PAR_surface/max(PAR_surface, na.rm = T),
                Q = discharge/max(discharge, na.rm = T),
@@ -49,13 +50,13 @@ prep_data <- function(dat){
 cbp <- filter(dat, site == "CBP") %>%
     prep_data()
 
+nhc <- filter(dat, site == "NHC") %>%
+    prep_data()
 # data simulation ####
 E_a = 0.63            # activation energy for heterotrophic respiration
 k_b = 8.6173 * 10^-5  # Boltzmann's constant in eV/K
 ARf = 0.44            # the fraction of GPP respired by autotrophs
 # Detrital Carbon Models: ####
-# Run simulations on the New River and Clackamas:
-# Constants
 
 # Model: detC_logpi_1 ####
 # define parameters
@@ -103,23 +104,23 @@ sim_cbp %>% select(date, GPP, Q, R, ER,C, litter )%>%
     facet_wrap(.~var, scales = 'free_y', ncol = 2)
 pars = c('beta_s', 'sigma_obs', 'sigma_proc', 'K_20')
 
-# stan_dat <- list(ndays = nrow(sim_cbp), R_obs = sim_cbp$R_obs, P = sim_cbp$GPP,
-#                  C0 = 100, temp = sim_cbp$temp_C, litter = sim_cbp$litter,
-#                  Q = sim_cbp$Q)
-# mod <- stan('src/SAM/stan/detC_logpi_1.stan',
-#             data = stan_dat,
-#             chains = 4,  cores = 4,
-#             warmup = 500, iter = 1000)
-# beep(sound = 8)
-# saveRDS(mod, 'src/SAM/stan/fits/detC_logpi_1_cbp_sim.rds')
+stan_dat <- list(ndays = nrow(sim_cbp), R_obs = sim_cbp$R_obs, P = sim_cbp$GPP,
+                 C0 = 100, temp = sim_cbp$temp_C, litter = sim_cbp$litter,
+                 Q = sim_cbp$Q)
+mod <- stan('src/models/stan/detC_logpi_1.stan',
+            data = stan_dat,
+            chains = 4,  cores = 4,
+            warmup = 500, iter = 1000)
+beep(sound = 8)
+saveRDS(mod, 'src/models/stan/fits/detC_logpi_1_cbp_sim.rds')
 
-# mod <- readRDS('src/SAM/stan/fits/detC_logpi_1_cbp_sim.rds')
+# mod <- readRDS('src/models/stan/fits/detC_logpi_1_cbp_sim.rds')
 # pp <- calc_pp_ests(mod, cbp, pars= pars, factors = c(1, 1, .1, .01),
 #                    sim_func = simulate_detC_logpi)
 #
 # saveRDS(list(mod = mod, post_preds = pp),
 #         'src/SAM/stan/fits/detC_logpi_1_cbp_sim_pp.rds')
-m <- readRDS('src/SAM/stan/fits/detC_logpi_1_cbp_sim_pp.rds')
+m <- readRDS('src/models/stan/fits/detC_logpi_1_cbp_sim_pp.rds')
 mod <- m$mod
 pp <- m$post_preds
 png('figures/nhc/PPcheck_detC_logpi_cbp_sim.png')
@@ -127,13 +128,13 @@ png('figures/nhc/PPcheck_detC_logpi_cbp_sim.png')
 dev.off()
 
 print(mod, pars)
-t <- traceplot(mod, ncol = 2, pars)
+t <- traceplot(mod, ncol = 1, pars)
 p <- plot_post_sim(mod, pars, vals = c(beta_s, sigma_obs, sigma_proc*10, K_20*100),
                    xlim = c(0,1.5))
 png('figures/nhc/detC_logpi_sim_cbp.png',
     height = 300, width = 650)
     plot <- ggpubr::ggarrange(p, t)
-    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det C log process error (New River)',
+    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det C log process error (CBP)',
                                                       size = 14))
 dev.off()
 
@@ -191,20 +192,20 @@ pars = c( 'tau0', 'sigma_obs', 'sigma_proc_scaled', 'K_20_scaled')
 stan_dat <- list(ndays = nrow(sim_cbp), R_obs = sim_cbp$R_obs, P = sim_cbp$GPP,
                  C0 = 100, temp = sim_cbp$temp_C, litter = sim_cbp$litter,
                  tau = sim_cbp$tau)
-mod <- stan('src/SAM/stan/detC_logpi_ss.stan',
+mod <- stan('src/models/stan/detC_logpi_ss.stan',
             data = stan_dat,
             chains = 4,  cores = 4,
             warmup = 500, iter = 1000)
 beep(sound = 8)
-saveRDS(mod, 'src/SAM/stan/fits/detC_logpi_ss_cbp_sim.rds')
+saveRDS(mod, 'src/models/stan/fits/detC_logpi_ss_cbp_sim.rds')
 
-# # mod <- readRDS('src/SAM/stan/fits/detC_logpi_ss_cbp_sim.rds')
+# # mod <- readRDS('src/models/stan/fits/detC_logpi_ss_cbp_sim.rds')
 # pp <- calc_pp_ests(mod, cbp, pars= pars, factors = c(1, 1, .1, .01),
 #                    sim_func = simulate_detC_logpi_ss)
 #
 # saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/detC_logpi_ss_cbp_sim_pp.rds')
-m <- readRDS('src/SAM/stan/fits/detC_logpi_ss_cbp_sim_pp.rds')
+#         'src/models/stan/fits/detC_logpi_ss_cbp_sim_pp.rds')
+m <- readRDS('src/models/stan/fits/detC_logpi_ss_cbp_sim_pp.rds')
 mod <- m$mod
 pp <- m$post_preds
 png('figures/nhc/PPcheck_detC_logpi_ss_cbp_sim.png')
@@ -212,13 +213,13 @@ png('figures/nhc/PPcheck_detC_logpi_ss_cbp_sim.png')
 dev.off()
 
 print(mod, pars)
-t <- traceplot(mod, ncol = 2, pars)
+t <- traceplot(mod, ncol = 1, pars)
 p <- plot_post_sim(mod, pars, vals = c(beta_s, sigma_obs, sigma_proc*10, K_20*100),
                    xlim = c(0,1.5))
 png('figures/nhc/detC_logpi_ss_sim_cbp.png',
     height = 300, width = 650)
     plot <- ggpubr::ggarrange(p, t)
-    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det C log pe, shear stress (New River)',
+    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det C log pe, shear stress (CBP)',
                                                       size = 14))
 dev.off()
 
@@ -280,31 +281,31 @@ sim_cbp %>% select(date, GPP, Q, R, ER, logC, litter )%>%
 stan_dat <- list(ndays = nrow(sim_cbp), R_obs = sim_cbp$R_obs, P = sim_cbp$GPP,
                  C0 = 100, temp = sim_cbp$temp_C, litter = sim_cbp$litter,
                  Q = sim_cbp$Q)
-mod <- stan('src/SAM/stan/detC.stan',
+mod <- stan('src/models/stan/detC.stan',
             data = stan_dat,
             chains = 4,  cores = 4,
             warmup = 500, iter = 1000)
 beep(sound = 8)
-saveRDS(mod, 'src/SAM/stan/fits/detC_cbp_sim.rds')
+saveRDS(mod, 'src/models/stan/fits/detC_cbp_sim.rds')
 
-# mod <- readRDS('src/SAM/stan/fits/detC_cbp_sim.rds')
+# mod <- readRDS('src/models/stan/fits/detC_cbp_sim.rds')
 # pp <- calc_pp_ests(mod, cbp, pars= pars, factors = c(1, 1, .1, .01),
 #                    sim_func = simulate_detC)
 # saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/detC_sim_cbp_pp.rds')
-m <- readRDS('src/SAM/stan/fits/detC_sim_cbp_pp.rds')
+#         'src/models/stan/fits/detC_sim_cbp_pp.rds')
+m <- readRDS('src/models/stan/fits/detC_sim_cbp_pp.rds')
 mod <- m$mod
 pp <- m$post_preds
 
 print(mod, names(pars))
-t <- traceplot(mod, ncol = 2, names(pars))
+t <- traceplot(mod, ncol = 1, names(pars))
 p <- plot_post_sim(mod, names(pars),
                    vals = c( pars$beta_s, pars$sigma_obs,
                              pars$sigma_proc*10, pars$K_20*100),
                    xlim = c(0,1.5))
 png('figures/nhc/detC_sim_cbp.png', height = 300, width = 650)
     plot <- ggpubr::ggarrange(p, t)
-    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det logC (cbp River)',
+    ggpubr::annotate_figure(plot, top = ggpubr::text_grob('Parameter recovery det logC (CBP)',
                                                       size = 14))
 dev.off()
 
@@ -316,22 +317,22 @@ dev.off()
 
 # Run on actual data ####
 
-stan_dat <- list(ndays = nrow(sim_cbp), R_obs = sim_cbp$ER, P = sim_cbp$GPP,
-                 C0 = 100, temp = sim_cbp$temp_C, litter = sim_cbp$litter,
-                 Q = sim_cbp$Q)
-mod <- stan('src/SAM/stan/detC.stan',
+stan_dat <- list(ndays = nrow(cbp), R_obs = cbp$ER, P = cbp$GPP,
+                 C0 = 100, temp = cbp$temp_C, litter = cbp$litter,
+                 Q = cbp$Q)
+mod <- stan('src/models/stan/detC.stan',
             data = stan_dat,
             chains = 4,  cores = 4,
             warmup = 500, iter = 1000)
 beep(sound = 8)
-saveRDS(mod, 'src/SAM/stan/fits/detC_cbp.rds')
+saveRDS(mod, 'src/models/stan/fits/detC_cbp.rds')
 
-# mod <- readRDS('src/SAM/stan/fits/detC_cbp.rds')
-# pp <- calc_pp_ests(mod, cbp, pars= pars, factors = c(1, 1, .1, .01),
-#                    sim_func = simulate_detC)
-# saveRDS(list(mod = mod, post_preds = pp),
-#         'src/SAM/stan/fits/detC_cbp_pp.rds')
-m <- readRDS('src/SAM/stan/fits/detC_cbp_pp.rds')
+# mod <- readRDS('src/models/stan/fits/detC_cbp.rds')
+pp <- calc_pp_ests(mod, cbp, pars= pars, factors = c(1, 1, .1, .01),
+                   sim_func = simulate_detC)
+saveRDS(list(mod = mod, post_preds = pp),
+        'src/models/stan/fits/detC_cbp_pp.rds')
+m <- readRDS('src/models/stan/fits/detC_cbp_pp.rds')
 mod <- m$mod
 pp <- m$post_preds
 
@@ -341,9 +342,9 @@ png('figures/nhc/PPcheck_detC_cbp.png')
     plot_pp_interval(sim_cbp$ER, pp)#, ylim = c(-30,0))
 dev.off()
 
-a <- traceplot(mod, ncol = 2, names(pars))
-b <- plot(mod, pars = names(pars))
-c <- pairs(mod, pars = names(pars))
+a <- traceplot(mod, ncol = 1, (pars))
+b <- plot(mod, pars = (pars))
+c <- pairs(mod, pars = (pars))
 
 png('figures/simulation_fits/rivers/detC_logpi_ss_cbp.png', height = 800, width = 400)
     ggpubr::ggarrange(a, b, ncol = 1)
